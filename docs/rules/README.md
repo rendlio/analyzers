@@ -49,16 +49,49 @@ that: turning off either one leaves the other reporting at error.
 
 ## Turning a rule off
 
-Four mechanisms, narrowest first. Each rule page repeats these spelled out with its own id.
+Every way out, narrowest first. Each rule page repeats these spelled out with its own id.
 
 **One call site**, with a comment saying why. This is the one to reach for first, because it is the
-only suppression that leaves its reason next to the code it applies to:
+narrowest of them: it covers a span rather than a whole declaration, and the reason it gives sits
+next to the code it excuses:
 
 ```csharp
 #pragma warning disable RENDLIO001 // <why this call site is legitimate>
 // ...
 #pragma warning restore RENDLIO001
 ```
+
+**One declaration**, with the reason as an argument rather than a comment. `[SuppressMessage]`
+covers the whole member or type it sits on, so it is a step wider than a pragma and has no restore
+to forget, and the `Justification` is part of the suppression rather than prose beside it:
+
+```csharp
+using System.Diagnostics.CodeAnalysis;
+
+[SuppressMessage("Rendlio.Security", "RENDLIO001",
+    Justification = "<why this member is legitimate>")]
+internal static void Export()
+{
+    // ...
+}
+```
+
+The same attribute can name its target from somewhere else, which is what an IDE writes into a
+`GlobalSuppressions.cs` when you ask it to suppress in source. It covers the same one member; what
+changes is that nothing at that member says so:
+
+```csharp
+using System.Diagnostics.CodeAnalysis;
+
+[assembly: SuppressMessage("Rendlio.Security", "RENDLIO001",
+    Justification = "<why this member is legitimate>",
+    Scope = "member", Target = "~M:Acme.Reports.Exporter.Export")]
+```
+
+Either spelling matches on the id and not on the category beside it, so the id is the part to get
+right: a wrong category still suppresses, a wrong id silently suppresses nothing, and a `Target`
+left behind by a rename matches no member at all — which brings the error back rather than hiding
+it somewhere else.
 
 **One rule, for a project or a folder**, in `.editorconfig`. `none` removes it; `warning` keeps the
 diagnostic and stops it failing the build, which is what a codebase adopting the pack usually wants
@@ -105,9 +138,23 @@ A suppression is a local exception to a global promise, so what it costs depends
 local it stays.
 
 A `#pragma` around one call site costs almost nothing: it is visible in review, it is greppable,
-and the comment beside it says why. A rule set to `none` for a folder costs the property for that
-folder — which is a real answer when the folder genuinely does not need it, and an invisible one
-when it does, because nothing in the build will mention it again.
+and the comment beside it says why. `[SuppressMessage]` on the declaration reads the same way in
+review and costs one thing more, in one direction: it covers the whole member rather than the line
+you meant it for, so it goes on covering whatever is added under it later. What it buys back is a
+`Justification` that is an argument rather than a comment — harder to leave off, and it travels
+with the suppression if the member moves.
+
+The assembly-scoped spelling of that attribute keeps the narrow effect and throws the locality
+away. It still covers one member, but from a `GlobalSuppressions.cs` that exists to be appended to
+and never read, and it names that member in a string instead of sitting on it — so the code it
+excuses carries no trace of it at all, which is the distance `NoWarn` is called out for below paid
+by a suppression that is otherwise among the narrowest on this page. A rename breaks the string,
+the member stops being covered, and the error comes back; that is generally how anyone finds out
+the suppression was there.
+
+A rule set to `none` for a folder costs the property for that folder — which is a real answer when
+the folder genuinely does not need it, and an invisible one when it does, because nothing in the
+build will mention it again.
 
 `NoWarn` costs the property for the whole project, and adds distance on top: it lives in the
 `.csproj`, usually as one id among several on a line nobody rereads, so nothing anywhere near the

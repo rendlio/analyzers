@@ -74,9 +74,9 @@ description.
 - **Diagnostic text and help links.** A message a stranger cannot act on, or a help link
   that goes nowhere, is a bug — a diagnostic is read in someone else's build log, with
   none of our context around it.
-- **Suppression that does not work.** Severity configuration, `#pragma warning disable`
-  and `NoWarn` are part of the contract; if a documented route to quiet a rule fails, that
-  is a bug.
+- **Suppression that does not work.** Severity configuration, `#pragma warning disable`,
+  `[SuppressMessage]` and `NoWarn` are part of the contract; if a documented route to quiet
+  a rule fails, that is a bug.
 - **Documentation that contradicts behaviour**, including this page.
 
 ## Out of scope

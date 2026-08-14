@@ -76,8 +76,22 @@ dotnet_analyzer_diagnostic.category-Rendlio.Security.severity = warning
 ```
 
 ```csharp
+using System.Diagnostics.CodeAnalysis; // for the attribute forms below
+
 #pragma warning disable RENDLIO001 // one call site, with a comment saying why
+
+// one declaration, with the reason as an argument rather than a comment
+[SuppressMessage("Rendlio.Security", "RENDLIO001",
+    Justification = "<why this member is legitimate>")]
+
+// the same member, named from a GlobalSuppressions.cs instead of sat on
+[assembly: SuppressMessage("Rendlio.Security", "RENDLIO001",
+    Justification = "<why this member is legitimate>",
+    Scope = "member", Target = "~M:Acme.Reports.Exporter.Export")]
 ```
+
+The attribute matches on the id, not on the category beside it — so a mistyped category still
+suppresses, and a mistyped id suppresses nothing and says nothing.
 
 If you find yourself suppressing this rule broadly, the honest reading is that the project does not
 want the ban — dropping the package reference for it says so more clearly than a suppression does.

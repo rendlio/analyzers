@@ -1043,6 +1043,33 @@ public sealed partial class ShippedTextTests
     private static partial Regex NoWarnList();
 
     /// <summary>
+    /// A <c>[SuppressMessage]</c>, capturing the category it names — its first argument.
+    /// </summary>
+    /// <remarks>
+    /// Matched on the attribute name alone, so the assembly-scoped spelling the pages publish for a
+    /// <c>GlobalSuppressions.cs</c> is read the same way as the one that sits on a declaration.
+    /// <para>
+    /// Held to a shipped category even though nothing at build time is: the attribute matches on
+    /// its id and ignores this argument, which
+    /// <see cref="SuppressionTests.An_attribute_matches_on_the_id_and_not_on_the_category_beside_it"/>
+    /// pins. That is the reason to check it here rather than a reason not to — a wrong category
+    /// costs a reader nothing at build time and would sit on the page uncorrected forever.
+    /// </para>
+    /// </remarks>
+    [GeneratedRegex(@"SuppressMessage\(\s*""([^""]+)""\s*,\s*""[^""]+""", RegexOptions.CultureInvariant)]
+    private static partial Regex SuppressedCategory();
+
+    /// <summary>
+    /// The same attribute, capturing the rule id it names — its second argument.
+    /// </summary>
+    /// <remarks>
+    /// Stops at a colon as well as at the quote, because the argument accepts an
+    /// <c>ID:Title</c> spelling and it is the part before the colon that has to name a shipped rule.
+    /// </remarks>
+    [GeneratedRegex(@"SuppressMessage\(\s*""[^""]+""\s*,\s*""([^"":]+)", RegexOptions.CultureInvariant)]
+    private static partial Regex SuppressedRule();
+
+    /// <summary>
     /// The names one capture holds. <c>NoWarn</c> is a list, and the spelling these pages publish
     /// leads with the MSBuild token carrying the inherited value, which is not an id and is dropped.
     /// Splitting also means a multi-id pragma reads as its ids rather than as the first one with a
@@ -1097,7 +1124,9 @@ public sealed partial class ShippedTextTests
                          (ConfiguredRule(), (ISet<string>)shippedRules, "rule"),
                          (PragmaRule(), shippedRules, "rule"),
                          (NoWarnList(), shippedRules, "rule"),
+                         (SuppressedRule(), shippedRules, "rule"),
                          (ConfiguredCategory(), shippedCategories, "category"),
+                         (SuppressedCategory(), shippedCategories, "category"),
                      })
             {
                 foreach (Match match in pattern.Matches(text))

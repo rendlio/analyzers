@@ -7,8 +7,9 @@ namespace Rendlio.Analyzers.Tests;
 
 /// <summary>
 /// The ways out, as the rule pages under <c>docs/rules</c> write them down: a <c>#pragma</c> around
-/// one call site, a severity in <c>.editorconfig</c>, a <c>NoWarn</c> in the project file, and a
-/// category switch back in the <c>.editorconfig</c>.
+/// one call site, a <c>[SuppressMessage]</c> on a declaration or naming one from a
+/// <c>GlobalSuppressions.cs</c>, a severity in <c>.editorconfig</c>, a <c>NoWarn</c> in the project
+/// file, and a category switch back in the <c>.editorconfig</c>.
 /// </summary>
 /// <remarks>
 /// <para>These rules report at severity error by default, which makes the escape hatch part of the
@@ -25,8 +26,9 @@ namespace Rendlio.Analyzers.Tests;
 /// <c>Every_suppression_a_published_page_shows_names_something_this_pack_ships</c>.</para>
 /// <para>The other half is what suppression must NOT do. A category switch names a category, so it
 /// has to leave the other category alone — the two are separate on purpose, because wanting
-/// reproducible output is not the same want as wanting a sealed box — and a pragma names a span, so
-/// it has to stop at the restore.</para>
+/// reproducible output is not the same want as wanting a sealed box — a pragma names a span, so it
+/// has to stop at the restore, and an attribute names a declaration, so it has to stop at the one
+/// it covers.</para>
 /// </remarks>
 public sealed class SuppressionTests
 {
@@ -255,6 +257,105 @@ public sealed class SuppressionTests
         diagnostics.ShouldHaveSingleItem().Severity.ShouldBe(DiagnosticSeverity.Error);
     }
 
+    // ---- SuppressMessage, per rule ----
+
+    [Theory]
+    [MemberData(nameof(EveryRuleAndCategory))]
+    public async Task An_attribute_on_the_declaration_silences_the_rule(string rule, string category)
+    {
+        // The mechanism an IDE reaches for on the consumer's behalf: "Suppress → in Source" writes
+        // this, so it is the hatch a reader is most likely to end up using without ever having read
+        // a page. It went undocumented and unpinned until now, which is the worst combination —
+        // widely used, and free to stop working unnoticed.
+        ImmutableArray<Diagnostic> diagnostics = await RunAsync(rule, Attributed(rule, category, rule));
+
+        diagnostics.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [MemberData(nameof(EveryRuleAndCategory))]
+    public async Task An_attribute_stops_at_the_declaration_it_sits_on(string rule, string category)
+    {
+        // What makes it a one-declaration hatch rather than a file-wide one, and the reason the
+        // pages place it a step wider than a pragma rather than beside it: it covers the whole
+        // member it sits on, and nothing past that member.
+        string source = Attributed(rule, category, rule) + Environment.NewLine + SecondViolationOf(rule);
+
+        ImmutableArray<Diagnostic> diagnostics = await RunAsync(rule, source);
+
+        diagnostics.ShouldHaveSingleItem().Id.ShouldBe(rule);
+        diagnostics[0].Severity.ShouldBe(DiagnosticSeverity.Error);
+
+        // The second violation is the one that survived, as in the pragma case: an attribute that
+        // covered the wrong declaration would also leave exactly one diagnostic behind.
+        Span(diagnostics[0], source).ShouldBe(SurvivingSpanOf(rule));
+    }
+
+    [Theory]
+    [MemberData(nameof(EveryRuleAndCategory))]
+    public async Task An_attribute_for_another_rule_does_not_silence_this_one(string rule, string category)
+    {
+        // Same family-scoping promise as the severity, pragma and NoWarn cases. This is the
+        // spelling where getting it wrong is quietest: a mistyped id here is a compiling attribute
+        // sitting in plain sight on the member, which reads exactly like a suppression that works.
+        ImmutableArray<Diagnostic> diagnostics = await RunAsync(rule, Attributed(rule, category, "RENDLIO999"));
+
+        diagnostics.ShouldHaveSingleItem().Severity.ShouldBe(DiagnosticSeverity.Error);
+    }
+
+    [Theory]
+    [MemberData(nameof(EveryRule))]
+    public async Task An_attribute_matches_on_the_id_and_not_on_the_category_beside_it(string rule)
+    {
+        // Pinned because the pages say it. The category argument is documentation for whoever reads
+        // the attribute, not a second thing that has to match, and the asymmetry is worth stating:
+        // a consumer who mistypes the category is suppressed anyway and never finds out, while one
+        // who mistypes the id is not suppressed at all and is told nothing either. Only one of
+        // those two costs them a red build, so only one of them gets discovered — which is exactly
+        // why the pages point at the id as the part to get right.
+        ImmutableArray<Diagnostic> diagnostics = await RunAsync(
+            rule,
+            Attributed(rule, "Not.A.Category.This.Pack.Ships", rule));
+
+        diagnostics.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [MemberData(nameof(EveryRuleAndCategory))]
+    public async Task An_assembly_scoped_attribute_silences_the_member_it_names(string rule, string category)
+    {
+        // The same attribute written into a GlobalSuppressions.cs, which is the file an IDE creates
+        // for it. A separate source rather than a prelude to the violation, because that is where a
+        // consumer's copy lives — and because an assembly attribute cannot follow the file-scoped
+        // namespace the fixtures declare anyway.
+        ImmutableArray<Diagnostic> diagnostics = await RunAsync(
+            rule,
+            ViolationOf(rule),
+            GlobalSuppressions(category, rule, TargetOf(rule)));
+
+        diagnostics.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [MemberData(nameof(EveryRuleAndCategory))]
+    public async Task An_assembly_scoped_attribute_stops_covering_a_member_that_was_renamed(
+        string rule,
+        string category)
+    {
+        // The cost the index gives this spelling, made concrete. Its subject is a string rather
+        // than the member it sits on, so a rename severs the two with nothing in the compiler
+        // objecting — and what a consumer sees is the error returning in code they did not touch.
+        // Pinned as the SAFE direction it is: the alternative, a stale target quietly matching
+        // something else, would be the one worth being frightened of.
+        ImmutableArray<Diagnostic> diagnostics = await RunAsync(
+            rule,
+            ViolationOf(rule),
+            GlobalSuppressions(category, rule, "~M:Example.Sut.Renamed"));
+
+        diagnostics.ShouldHaveSingleItem().Id.ShouldBe(rule);
+        diagnostics[0].Severity.ShouldBe(DiagnosticSeverity.Error);
+    }
+
     // ---- NoWarn, per rule ----
 
     [Theory]
@@ -297,8 +398,8 @@ public sealed class SuppressionTests
         diagnostics.ShouldBeEmpty();
     }
 
-    private static Task<ImmutableArray<Diagnostic>> RunAsync(string rule, string source) =>
-        AnalyzerHarness.RunAsync(AnalyzerFor(rule), "Consumer", source);
+    private static Task<ImmutableArray<Diagnostic>> RunAsync(string rule, params string[] sources) =>
+        AnalyzerHarness.RunAsync(AnalyzerFor(rule), "Consumer", sources);
 
     private static Task<ImmutableArray<Diagnostic>> RunConfiguredAsync(
         string rule,
@@ -360,6 +461,87 @@ public sealed class SuppressionTests
         NonDeterminismRule => "Random",
         _ => throw new ArgumentOutOfRangeException(nameof(rule), rule, "No analyzer ships that rule."),
     };
+
+    /// <summary>
+    /// The member each fixture declares the violation in, as it is spelled in the source. Matched
+    /// on rather than assumed so <see cref="Attributed"/> can splice an attribute above it, and
+    /// distinct from the declaration <see cref="SecondViolationOf"/> adds so the splice cannot land
+    /// on the wrong one.
+    /// </summary>
+    private static string DeclarationOf(string rule) => rule switch
+    {
+        BannedApiRule => "    internal static void Run()",
+        NonDeterminismRule => "    internal static string Name()",
+        _ => throw new ArgumentOutOfRangeException(nameof(rule), rule, "No analyzer ships that rule."),
+    };
+
+    /// <summary>
+    /// The documentation-comment id of that member, which is what the <c>Target</c> of an
+    /// assembly-scoped attribute names. The leading <c>~</c> is the spelling an IDE writes into a
+    /// <c>GlobalSuppressions.cs</c>, and the one the pages publish.
+    /// </summary>
+    private static string TargetOf(string rule) => rule switch
+    {
+        BannedApiRule => "~M:Example.Sut.Run",
+        NonDeterminismRule => "~M:Example.Sut.Name",
+        _ => throw new ArgumentOutOfRangeException(nameof(rule), rule, "No analyzer ships that rule."),
+    };
+
+    /// <summary>
+    /// The violation of <paramref name="rule"/> with a <c>[SuppressMessage]</c> naming
+    /// <paramref name="category"/> and <paramref name="checkId"/> on the member declaring it.
+    /// </summary>
+    /// <remarks>
+    /// Spliced in rather than written into a fixture of its own, so the suppressed source and the
+    /// unsuppressed one cannot drift apart into two snippets that differ in more than the attribute.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// The fixture no longer declares the member <see cref="DeclarationOf"/> names. Fatal rather
+    /// than a silent no-op: a splice that quietly did nothing would leave the cases asserting the
+    /// rule still reports passing with no attribute in the source at all.
+    /// </exception>
+    private static string Attributed(string rule, string category, string checkId)
+    {
+        string declaration = DeclarationOf(rule);
+        string source = ViolationOf(rule);
+
+        string attributed = source.Replace(
+            declaration,
+            $"""
+                [SuppressMessage("{category}", "{checkId}",
+                    Justification = "{Justification}")]
+            """ + Environment.NewLine + declaration,
+            StringComparison.Ordinal);
+
+        // Unqualified and imported rather than spelled out in full, because that is what the pages
+        // publish — and because the import is the first thing that can go wrong with a pasted
+        // attribute. Compiling the qualified form would prove the mechanism and skip the paste.
+        return string.Equals(attributed, source, StringComparison.Ordinal)
+            ? throw new InvalidOperationException(
+                $"The {rule} fixture no longer declares '{declaration}', so no attribute was applied.")
+            : Import + Environment.NewLine + attributed;
+    }
+
+    /// <summary>
+    /// A <c>GlobalSuppressions.cs</c> naming one member, in the spelling the pages publish.
+    /// </summary>
+    private static string GlobalSuppressions(string category, string checkId, string target) =>
+        $"""
+        {Import}
+
+        [assembly: SuppressMessage("{category}", "{checkId}",
+            Justification = "{Justification}",
+            Scope = "member", Target = "{target}")]
+        """;
+
+    /// <summary>The namespace the attribute lives in, as both spellings of it need importing.</summary>
+    private const string Import = "using System.Diagnostics.CodeAnalysis;";
+
+    /// <summary>
+    /// What the reason reads as. The attribute's whole advantage over a pragma is that this is an
+    /// argument rather than a comment, so every case that drives one carries it.
+    /// </summary>
+    private const string Justification = "A worked example, in a fixture that never ships.";
 
     /// <summary>Wraps <paramref name="source"/> in a disable/restore pair for <paramref name="rule"/>.</summary>
     private static string Disabled(string source, string rule) =>

@@ -25,7 +25,7 @@ page says what the rule deliberately does *not* report, and how to scope or supp
 
 The [rules index](https://github.com/Rendlio/analyzers/blob/main/docs/rules/README.md) is the
 full list, and carries what is true of every rule rather than of one: how ids are allocated, what
-the two categories are for, the four ways to turn a rule off, and what each of them costs.
+the two categories are for, every way to turn a rule off, and what each of them costs.
 
 ## Installing
 

@@ -73,8 +73,22 @@ dotnet_analyzer_diagnostic.category-Rendlio.Determinism.severity = warning
 ```
 
 ```csharp
+using System.Diagnostics.CodeAnalysis; // for the attribute forms below
+
 #pragma warning disable RENDLIO002 // one call site, with a comment saying why
+
+// one declaration, with the reason as an argument rather than a comment
+[SuppressMessage("Rendlio.Determinism", "RENDLIO002",
+    Justification = "<why this member is legitimate>")]
+
+// the same member, named from a GlobalSuppressions.cs instead of sat on
+[assembly: SuppressMessage("Rendlio.Determinism", "RENDLIO002",
+    Justification = "<why this member is legitimate>",
+    Scope = "member", Target = "~M:Acme.Reports.Exporter.NextName")]
 ```
+
+The attribute matches on the id, not on the category beside it — so a mistyped category still
+suppresses, and a mistyped id suppresses nothing and says nothing.
 
 Test projects are the common case for a blanket exemption: seeding a `Random` and stamping a temp
 path is ordinary there. The cleanest way to say so is to leave the package reference off those
