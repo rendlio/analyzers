@@ -220,7 +220,8 @@ public sealed class SuppressionTests
     public async Task A_pragma_silences_the_span_it_covers(string rule)
     {
         // The one-call-site hatch, which is the one a page asks a consumer to reach for first: it
-        // is the only suppression that leaves a comment next to the code explaining itself.
+        // is the narrowest of them, covering a span rather than a whole declaration, with the
+        // reason it gives sitting next to the code it excuses.
         ImmutableArray<Diagnostic> diagnostics = await RunAsync(rule, Disabled(ViolationOf(rule), rule));
 
         diagnostics.ShouldBeEmpty();
@@ -288,6 +289,41 @@ public sealed class SuppressionTests
 
         // The second violation is the one that survived, as in the pragma case: an attribute that
         // covered the wrong declaration would also leave exactly one diagnostic behind.
+        Span(diagnostics[0], source).ShouldBe(SurvivingSpanOf(rule));
+    }
+
+    [Theory]
+    [MemberData(nameof(EveryRuleAndCategory))]
+    public async Task An_attribute_on_the_type_covers_the_members_inside_it(string rule, string category)
+    {
+        // The other half of what the index promises the attribute covers — "the whole member or
+        // type it sits on". A reader who puts it on the type is not reaching for a sixth mechanism,
+        // but they are leaning on a second claim, and it is the one the member cases cannot reach:
+        // every case above splices the attribute onto the member carrying the violation, so all of
+        // them would still pass if the attribute only ever covered the declaration it sat on.
+        ImmutableArray<Diagnostic> diagnostics = await RunAsync(rule, AttributedType(rule, category, rule));
+
+        diagnostics.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [MemberData(nameof(EveryRuleAndCategory))]
+    public async Task An_attribute_on_the_type_stops_at_that_type(string rule, string category)
+    {
+        // And it stops there. This is the direction that would hurt: an attribute reaching past its
+        // type would be the broadest suppression on the page wearing the label of one of the
+        // narrowest, and the code it silently covered would carry no sign of it — which is the
+        // failure the pragma's restore is guarded against, one declaration up.
+        string source = AttributedType(rule, category, rule)
+            + Environment.NewLine
+            + SecondViolationOf(rule);
+
+        ImmutableArray<Diagnostic> diagnostics = await RunAsync(rule, source);
+
+        diagnostics.ShouldHaveSingleItem().Id.ShouldBe(rule);
+        diagnostics[0].Severity.ShouldBe(DiagnosticSeverity.Error);
+
+        // The survivor is the violation in the sibling type, not the covered one.
         Span(diagnostics[0], source).ShouldBe(SurvivingSpanOf(rule));
     }
 
@@ -362,10 +398,10 @@ public sealed class SuppressionTests
     [MemberData(nameof(EveryRule))]
     public async Task NoWarn_silences_the_rule(string rule)
     {
-        // The project-file spelling, and the least obvious of the four: NoWarn reads as a switch
-        // about *warnings*, and these rules report at error. It is named in the triage policy as
-        // part of the contract, so what it does to an error-severity rule is pinned here rather
-        // than left for a consumer to discover in a build they cannot get green.
+        // The project-file spelling, and the least obvious way out on the page: NoWarn reads as a
+        // switch about *warnings*, and these rules report at error. It is named in the triage
+        // policy as part of the contract, so what it does to an error-severity rule is pinned here
+        // rather than left for a consumer to discover in a build they cannot get green.
         ImmutableArray<Diagnostic> diagnostics = await RunNoWarnAsync(rule, rule, ViolationOf(rule));
 
         diagnostics.ShouldBeEmpty();
@@ -375,9 +411,10 @@ public sealed class SuppressionTests
     [MemberData(nameof(EveryRule))]
     public async Task NoWarn_for_another_rule_leaves_this_one_alone(string rule)
     {
-        // Same family-scoping promise as the severity and pragma cases, through the mechanism that
-        // is furthest from the code it acts on: a NoWarn is invisible at the call site, so a rule
-        // answering to an id that is not its own would be near-impossible to spot from the source.
+        // Same family-scoping promise as the severity, pragma and attribute cases, through the
+        // mechanism furthest from the code it acts on: a NoWarn is invisible at the call site, so
+        // a rule answering to an id that is not its own would be near-impossible to spot from the
+        // source.
         ImmutableArray<Diagnostic> diagnostics = await RunNoWarnAsync(rule, "RENDLIO999", ViolationOf(rule));
 
         diagnostics.ShouldHaveSingleItem().Severity.ShouldBe(DiagnosticSeverity.Error);
@@ -488,37 +525,69 @@ public sealed class SuppressionTests
     };
 
     /// <summary>
+    /// The type each fixture declares that member on. Spelled the same way in both, so unlike
+    /// <see cref="DeclarationOf"/> it does not need to be chosen per rule — and distinct from the
+    /// type <see cref="SecondViolationOf"/> adds, so a splice onto it cannot land on that one.
+    /// </summary>
+    private const string TypeDeclaration = "internal static class Sut";
+
+    /// <summary>
     /// The violation of <paramref name="rule"/> with a <c>[SuppressMessage]</c> naming
     /// <paramref name="category"/> and <paramref name="checkId"/> on the member declaring it.
+    /// </summary>
+    private static string Attributed(string rule, string category, string checkId) =>
+        Spliced(
+            rule,
+            DeclarationOf(rule),
+            $"""
+                [SuppressMessage("{category}", "{checkId}",
+                    Justification = "{Justification}")]
+            """);
+
+    /// <summary>
+    /// The same violation with the same attribute on the type declaring that member, which is the
+    /// other thing the index says the attribute can sit on.
+    /// </summary>
+    private static string AttributedType(string rule, string category, string checkId) =>
+        Spliced(
+            rule,
+            TypeDeclaration,
+            $"""
+            [SuppressMessage("{category}", "{checkId}",
+                Justification = "{Justification}")]
+            """);
+
+    /// <summary>
+    /// The violation of <paramref name="rule"/> with <paramref name="attribute"/> spliced in on the
+    /// line above <paramref name="anchor"/>, and the namespace it needs imported at the top.
     /// </summary>
     /// <remarks>
     /// Spliced in rather than written into a fixture of its own, so the suppressed source and the
     /// unsuppressed one cannot drift apart into two snippets that differ in more than the attribute.
+    /// <para>
+    /// The import is unqualified rather than spelled out in full, because that is what the pages
+    /// publish — and because it is the first thing that can go wrong with a pasted attribute.
+    /// Compiling the qualified form would prove the mechanism and skip the paste.
+    /// </para>
     /// </remarks>
     /// <exception cref="InvalidOperationException">
-    /// The fixture no longer declares the member <see cref="DeclarationOf"/> names. Fatal rather
-    /// than a silent no-op: a splice that quietly did nothing would leave the cases asserting the
-    /// rule still reports passing with no attribute in the source at all.
+    /// The fixture no longer contains <paramref name="anchor"/>. Fatal rather than a silent no-op:
+    /// a splice that quietly did nothing would leave the cases asserting the rule goes quiet
+    /// failing loudly, but the ones asserting it still reports passing with no attribute in the
+    /// source at all.
     /// </exception>
-    private static string Attributed(string rule, string category, string checkId)
+    private static string Spliced(string rule, string anchor, string attribute)
     {
-        string declaration = DeclarationOf(rule);
         string source = ViolationOf(rule);
 
         string attributed = source.Replace(
-            declaration,
-            $"""
-                [SuppressMessage("{category}", "{checkId}",
-                    Justification = "{Justification}")]
-            """ + Environment.NewLine + declaration,
+            anchor,
+            attribute + Environment.NewLine + anchor,
             StringComparison.Ordinal);
 
-        // Unqualified and imported rather than spelled out in full, because that is what the pages
-        // publish — and because the import is the first thing that can go wrong with a pasted
-        // attribute. Compiling the qualified form would prove the mechanism and skip the paste.
         return string.Equals(attributed, source, StringComparison.Ordinal)
             ? throw new InvalidOperationException(
-                $"The {rule} fixture no longer declares '{declaration}', so no attribute was applied.")
+                $"The {rule} fixture no longer contains '{anchor}', so no attribute was applied.")
             : Import + Environment.NewLine + attributed;
     }
 
