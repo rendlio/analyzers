@@ -12,14 +12,12 @@ answered, but not yet fixed in a version you can install.
 
 - **A false positive, a missed violation, a crash, a packaging or documentation defect:**
   [GitHub issues](https://github.com/Rendlio/analyzers/issues) on this repository.
-- **A suspected security problem:** report it privately with **Report a vulnerability** on
-  this repository's [Security tab](https://github.com/Rendlio/analyzers/security), which
-  opens a thread only you and the maintainers can read. If that is not available to you,
-  open an ordinary issue saying only that you have a security report and how to reach
-  you — we will take the detail off the public thread rather than leave you without a
-  route. What we ask in return is a chance to publish a fixed release before you write it
-  up. We do not run a paid bounty programme; we will credit you in the release notes
-  unless you would rather we did not.
+- **A suspected security problem:** use the private route in the
+  [security policy](SECURITY.md) rather than an issue, and please keep the detail off any
+  public thread until there is a release to upgrade to. That is the page GitHub links
+  from this repository's Security tab, and it is where the route is specified — including
+  what to do if the private route is not available to you, and what we do in return. The
+  acknowledgment window below applies to it.
 - **A rule you would like to see, or a ban you need to bend:** GitHub issues, after
   reading "How priorities get decided" below.
 

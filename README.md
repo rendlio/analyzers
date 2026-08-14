@@ -115,8 +115,11 @@ and `netstandard2.0` is the only target both can load.
 
 Issues and pull requests are welcome. What happens to one — response expectations, what is in
 and out of scope, and how priorities are decided — is written down in the
-[triage policy](https://github.com/Rendlio/analyzers/blob/main/TRIAGE.md), which also gives the
-private route for reporting a suspected security problem.
+[triage policy](https://github.com/Rendlio/analyzers/blob/main/TRIAGE.md).
+
+A suspected security problem goes through the private route in the
+[security policy](https://github.com/Rendlio/analyzers/blob/main/SECURITY.md) instead — please
+keep the detail off any public thread until there is a release to upgrade to.
 
 Two things worth knowing before you open either:
 

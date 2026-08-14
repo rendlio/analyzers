@@ -122,6 +122,9 @@ public sealed partial class ShippedTextTests
     /// <summary>The published triage policy, at the repository root.</summary>
     private const string TriagePolicy = "TRIAGE.md";
 
+    /// <summary>The published security policy, at the repository root.</summary>
+    private const string SecurityPolicy = "SECURITY.md";
+
     /// <summary>
     /// This repository's URL, read back from the one file that declares it.
     /// </summary>
@@ -159,6 +162,61 @@ public sealed partial class ShippedTextTests
 
         Assert.Contains(TriagePolicy, targets);
     }
+
+    [Fact]
+    public void The_security_policy_is_published_at_the_repository_root()
+    {
+        // Pinned by path for a harder reason than the triage policy is: GitHub surfaces this page
+        // in the repository's Security tab and links it from the new-issue flow, and it reads it
+        // from the root, `.github/` or `docs/` and nowhere else. So a move that looks like tidying
+        // silently removes the page from the one place a reporter goes looking, while the file
+        // still exists and every link to it still resolves. Nothing else would notice.
+        Assert.True(File.Exists(Path.Combine(RepositoryRoot, SecurityPolicy)));
+        Assert.Contains(PublishedPages(), p => Path.GetFileName(p) == SecurityPolicy);
+    }
+
+    [Fact]
+    public void The_readme_links_to_the_security_policy()
+    {
+        // Same reasoning as the triage-policy link, one degree more load-bearing: a consumer who
+        // reads only what nuget.org renders has to be able to reach the private disclosure route
+        // from there, or their alternative is the public issue tracker — which is the one place
+        // this policy asks them not to put it.
+        IReadOnlyList<string> targets = PageLinks.RepositoryTargets(
+            "README.md",
+            File.ReadAllText(Path.Combine(RepositoryRoot, "README.md")),
+            RepositoryUrl);
+
+        Assert.Contains(SecurityPolicy, targets);
+    }
+
+    [Fact]
+    public void Both_policies_state_the_same_acknowledgment_window()
+    {
+        // The window is a promise to a reporter, and it is stated on both pages on purpose: the
+        // security policy would be evasive without it, and the triage policy is where every other
+        // number this repository commits to lives. Two statements of one number drift — so the
+        // number is pinned to itself here rather than to a literal, which would need editing in a
+        // third place to move it and would go stale the same way.
+        Match onTriagePolicy = AcknowledgmentWindow().Match(
+            File.ReadAllText(Path.Combine(RepositoryRoot, TriagePolicy)));
+        Match onSecurityPolicy = AcknowledgmentWindow().Match(
+            File.ReadAllText(Path.Combine(RepositoryRoot, SecurityPolicy)));
+
+        Assert.True(onTriagePolicy.Success, $"{TriagePolicy} no longer states an acknowledgment window.");
+        Assert.True(onSecurityPolicy.Success, $"{SecurityPolicy} no longer states an acknowledgment window.");
+        Assert.Equal(onTriagePolicy.Groups[1].Value, onSecurityPolicy.Groups[1].Value, ignoreCase: true);
+    }
+
+    /// <summary>How long a report waits for a human, capturing the number of working days.</summary>
+    /// <remarks>
+    /// Spelled out rather than numeric because both pages write it that way, and deliberately not
+    /// anchored to either page's surrounding sentence: it has to keep matching when one of them is
+    /// reworded, or the pin becomes a tax on editing prose rather than a guard on the promise.
+    /// </remarks>
+    [GeneratedRegex(@"acknowledged within (\w+) working days",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex AcknowledgmentWindow();
 
     [Fact]
     public void Every_link_from_a_published_page_into_this_repository_resolves()
