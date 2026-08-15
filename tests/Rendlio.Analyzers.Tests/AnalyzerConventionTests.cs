@@ -154,6 +154,7 @@ public sealed class AnalyzerConventionTests
     [InlineData(typeof(ForeignIdAnalyzer), "is not of the form RENDLIO000")]
     [InlineData(typeof(NonAsciiIdAnalyzer), "is not of the form RENDLIO000")]
     [InlineData(typeof(TrailingNewlineIdAnalyzer), "is not of the form RENDLIO000")]
+    [InlineData(typeof(OverlongIdAnalyzer), "is not of the form RENDLIO000")]
     [InlineData(typeof(UndocumentedAnalyzer), "HelpLinkUri")]
     [InlineData(typeof(InternallyWordedAnalyzer), "means nothing outside")]
     [InlineData(typeof(UnconstructableAnalyzer), "public parameterless constructor")]
@@ -344,6 +345,20 @@ public sealed class AnalyzerConventionTests
     {
         public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
             [Descriptor("RENDLIO907\n")];
+    }
+
+    /// <summary>
+    /// Carries four digits where the convention allows three. Nothing else in this set proves the
+    /// word "exactly": <see cref="ForeignIdAnalyzer"/> fails on its prefix, and the two ill-formed
+    /// digit fixtures above fail on what their digits are rather than on how many there are — so a
+    /// quantifier loosened to <c>{3,}</c> satisfies every one of them while letting the family
+    /// leave the fixed width that its documentation and its per-rule help links are built around.
+    /// </summary>
+    [DiagnosticAnalyzer(LanguageNames.CSharp)]
+    private sealed class OverlongIdAnalyzer : FixtureAnalyzer
+    {
+        public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
+            [Descriptor("RENDLIO9080")];
     }
 
     [DiagnosticAnalyzer(LanguageNames.CSharp)]
