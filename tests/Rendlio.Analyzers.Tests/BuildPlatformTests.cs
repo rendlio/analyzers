@@ -18,7 +18,10 @@ namespace Rendlio.Analyzers.Tests;
 /// working. That makes it the kind of line someone deletes for having no visible effect, and the
 /// kind someone rewrites into what looks like the same thing: conditioned on <c>$(Platform)</c>
 /// being empty, the way the SDK's own default is written, it cannot fire in the one case it
-/// exists for. Both endings are checked here, because nothing else in the build can check either.
+/// exists for. That second ending is read wherever the condition is written — on the property, on
+/// its <c>PropertyGroup</c>, or on a <c>Choose</c> around it — because the group is where MSBuild
+/// convention puts one and a rule that saw only the inline form would pass the likeliest spelling
+/// of the wrong fix. Both endings are checked here; nothing else in the build can check either.
 /// </para>
 /// </remarks>
 public sealed class BuildPlatformTests
@@ -44,6 +47,14 @@ public sealed class BuildPlatformTests
         // from a repository that complies.
         Assert.True(File.Exists(PropsPath), $"{PropsFile} is not at the repository root.");
         Assert.NotEmpty(PropertyElements(File.ReadAllText(PropsPath)));
+
+        // And that the root's copy is the one a project reaches, which is the other half of the
+        // same claim. MSBuild stops at the FIRST file of this name it meets walking up, so one
+        // added nearer a project detaches everything above it — this pin included — while the rule
+        // goes on reading the root's copy and reporting the repository clean. A nearer file is not
+        // forbidden; it just has to carry the pin itself or import the one above it with
+        // GetPathOfFileAbove, and going red here is how that stays a decision somebody makes.
+        Assert.Equal(PropsPath, Assert.Single(PropsFilesInRepository()));
     }
 
     [Theory]
@@ -78,6 +89,31 @@ public sealed class BuildPlatformTests
           </PropertyGroup>
         </Project>
         """)]
+    // The same defeat one level up. This is the likeliest of the three: a condition belongs on the
+    // group by MSBuild convention, the property underneath reads as an ordinary unconditional pin,
+    // and the file has to be read outwards from it to see that it never fires.
+    [InlineData(
+        """
+        <Project>
+          <PropertyGroup Condition="'$(Platform)' == ''">
+            <Platform>AnyCPU</Platform>
+          </PropertyGroup>
+        </Project>
+        """)]
+    // And two levels up, which is what a <Choose> is for. Rarer, same effect, and it is the case
+    // that decides the rule has to walk ancestors rather than look one level out.
+    [InlineData(
+        """
+        <Project>
+          <Choose>
+            <When Condition="'$(Platform)' == ''">
+              <PropertyGroup>
+                <Platform>AnyCPU</Platform>
+              </PropertyGroup>
+            </When>
+          </Choose>
+        </Project>
+        """)]
     public void A_props_file_that_leaves_the_platform_to_the_environment_is_reported(string props) =>
         Assert.Single(PlatformPinViolations(PropsFile, props));
 
@@ -110,6 +146,29 @@ public sealed class BuildPlatformTests
 
     /// <summary>The props file this repository is held to, at the root every project walks up to.</summary>
     private static string PropsPath => Path.Combine(RepositoryLayout.Root, PropsFile);
+
+    /// <summary>
+    /// Every file of that name in the repository, build output aside — which should be the root's
+    /// and nothing else, because a nearer one is what a project would import instead.
+    /// </summary>
+    /// <remarks>
+    /// <c>bin</c> and <c>obj</c> are skipped because a copy under either is output rather than
+    /// input: nothing walks up out of a build directory to find it, so reporting one would fail
+    /// the build over an artifact of having built.
+    /// </remarks>
+    private static List<string> PropsFilesInRepository() =>
+        [.. Directory.EnumerateFiles(RepositoryLayout.Root, PropsFile, SearchOption.AllDirectories)
+            .Where(path => !IsBuildOutput(path))
+            .OrderBy(path => path, StringComparer.Ordinal)];
+
+    /// <summary>True when <paramref name="path"/> sits under a <c>bin</c> or <c>obj</c> directory.</summary>
+    private static bool IsBuildOutput(string path)
+    {
+        string normalised = path.Replace('\\', '/');
+
+        return normalised.Contains("/bin/", StringComparison.Ordinal)
+            || normalised.Contains("/obj/", StringComparison.Ordinal);
+    }
 
     /// <summary>
     /// Every property element in <paramref name="propsText"/> — anything written directly inside a
@@ -148,12 +207,19 @@ public sealed class BuildPlatformTests
 
         foreach (XElement pin in pins)
         {
-            XAttribute? condition = pin.Attribute("Condition");
+            // The nearest condition on the way out, rather than the one written on the property
+            // itself. A <PropertyGroup> is where MSBuild convention puts a condition and where the
+            // SDK writes this very property; a <Choose>/<When> around it is a third spelling of the
+            // same thing. Each one stops the pin firing exactly as an inline condition would, so a
+            // rule that read only the element would report the likeliest wrong fix as clean.
+            XAttribute? condition = pin.AncestorsAndSelf()
+                .Select(element => element.Attribute("Condition"))
+                .FirstOrDefault(attribute => attribute is not null);
 
             if (condition is not null)
             {
                 violations.Add(
-                    $"{propsPath}: conditions <Platform> on \"{condition.Value}\". An inherited Platform is what makes the property non-empty, so a condition is how this pin stops firing in the one case it is for. State it unconditionally — an explicit -p:Platform= is a global property and overrides it regardless.");
+                    $"{propsPath}: conditions <Platform> on \"{condition.Value}\", written on <{condition.Parent?.Name.LocalName}>. An inherited Platform is what makes the property non-empty, so a condition is how this pin stops firing in the one case it is for. State it unconditionally — an explicit -p:Platform= is a global property and overrides it regardless.");
             }
 
             string pinned = pin.Value.Trim();
