@@ -234,9 +234,13 @@ public sealed class RestorePinningTests
         // Guards the guard, the way the workflow sweep does: a rule enforced by walking a
         // directory reports green the moment the walk stops finding anything, and an empty walk is
         // indistinguishable from a repository that complies.
+        //
+        // Presence rather than a count, which is the idiom the other walks here use: this
+        // repository is expected to gain projects — a consumer pinned to the oldest supported SDK
+        // is the next one planned — and a guard reading "Expected 2, Actual 3" blames the walk for
+        // someone else's addition.
         List<string> projects = Projects();
 
-        Assert.Equal(2, projects.Count);
         Assert.Contains(projects, path => Path.GetFileName(path) == "Rendlio.Analyzers.csproj");
         Assert.Contains(projects, path => Path.GetFileName(path) == "Rendlio.Analyzers.Tests.csproj");
     }

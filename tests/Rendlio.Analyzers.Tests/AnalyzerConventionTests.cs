@@ -128,13 +128,18 @@ public sealed class AnalyzerConventionTests
     [Fact]
     public void The_release_files_without_their_shipped_half_leave_every_rule_untracked()
     {
-        // The failure the check above exists for, driven rather than assumed: reading the
-        // unshipped file alone is exactly the state a deleted AnalyzerReleases.Shipped.md leaves
-        // the compiler in, and it is the state that currently builds green.
-        string unshippedOnly = File.ReadAllText(
-            Path.Combine(ReleaseTrackingDirectory, "AnalyzerReleases.Unshipped.md"));
+        // The failure the check above exists for, driven rather than assumed: with
+        // AnalyzerReleases.Shipped.md deleted, all that remains of the corpus is the unshipped
+        // file's header comment and no rule table under it — which still reads to the
+        // release-tracking analyzer as tracking switched on, and still builds green.
+        //
+        // Stated here rather than read out of the live unshipped file. That file is header-only
+        // today, but docs/internal/releasing.md makes it the place a new rule is declared first and
+        // empties it again only at release time — so a test reading it would turn red on the day a
+        // rule is added, under a name pointing at a deleted shipped file rather than at the rule.
+        const string shippedHalfDeleted = "; Unshipped analyzer release\n";
 
-        Assert.Equal(ShippedRuleIds(), UntrackedRules(ShippedRuleIds(), unshippedOnly));
+        Assert.Equal(ShippedRuleIds(), UntrackedRules(ShippedRuleIds(), shippedHalfDeleted));
     }
 
     [Fact]

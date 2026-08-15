@@ -50,9 +50,9 @@
     a reviewable diff.
 
     Neither file is listed as an <AdditionalFiles> here, deliberately.
-    Microsoft.CodeAnalysis.Analyzers adds them itself — its own
-    buildTransitive targets include each file when it exists in the project directory — so listing them again puts each identity in
-    @(AdditionalFiles) twice. The compiler does not mind, but every Roslyn workspace load then
+    Microsoft.CodeAnalysis.Analyzers adds them itself — its own buildTransitive targets include
+    each file when it exists in the project directory — so listing them again puts each identity
+    in @(AdditionalFiles) twice. The compiler does not mind, but every Roslyn workspace load then
     reports "Duplicate source file", which is what "Warnings were encountered while loading the
     workspace" means when `dotnet format` prints it on an otherwise green run — in a CI log that
     runs format at diagnostic verbosity, so the noise is permanent and points at nothing.
