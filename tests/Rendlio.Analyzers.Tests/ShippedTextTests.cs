@@ -1402,6 +1402,95 @@ public sealed partial class ShippedTextTests
         }
     }
 
+    // ------------------------------- the release-tracking history, and the version it is against
+
+    /// <summary>A <c>## Release &lt;version&gt;</c> heading, capturing the version it names.</summary>
+    /// <remarks>
+    /// Anchored at the start of a line so a heading is a heading: the same words inside a code fence
+    /// or a sentence are not a release the analyzer would read.
+    /// </remarks>
+    [GeneratedRegex(@"^##[ \t]+Release[ \t]+(\S+)[ \t]*$",
+        RegexOptions.Multiline | RegexOptions.CultureInvariant)]
+    private static partial Regex ShippedReleaseHeading();
+
+    /// <summary>Every version named by a release heading in <c>AnalyzerReleases.Shipped.md</c>.</summary>
+    private static List<string> DeclaredReleases() =>
+        [.. ShippedReleaseHeading()
+            .Matches(
+                File.ReadAllText(
+                    Path.Combine(
+                        RepositoryRoot, "src", "Rendlio.Analyzers", "AnalyzerReleases.Shipped.md")))
+            .Select(static match => match.Groups[1].Value)];
+
+    [Fact]
+    public void No_release_heading_names_a_version_this_repository_has_not_reached()
+    {
+        // The release-tracking analyzer enforces that every rule id this assembly reports is
+        // declared in one of the two AnalyzerReleases files. It says nothing about the number in the
+        // heading, so "## Release 0.2.0" in a repository building 0.1.0 is a file claiming rules
+        // shipped in a version that does not exist — and the likely way to write it is to add the
+        // heading for the release you mean to cut and not bump the project file. That mistake is
+        // caught on the tag by release.yml, which refuses a tag disagreeing with VersionPrefix; this
+        // is the same comparison one step earlier, on the commit rather than on the tag, because the
+        // heading is what a consumer reads to learn which version introduced a rule.
+        string declared = DeclaredVersionPrefix;
+        List<string> releases = DeclaredReleases();
+
+        // Guards the guard: a file that stopped carrying a heading, or a pattern that stopped
+        // matching one, would have nothing to disagree with and would report green forever.
+        Assert.NotEmpty(releases);
+
+        Assert.All(
+            releases,
+            release =>
+            {
+                // The shape is RS2007's job on any build where Microsoft.CodeAnalysis.Analyzers is
+                // present — measured: a heading carrying a prerelease suffix fails the build there
+                // before this test runs. Checked anyway, because this reads the file off disk while
+                // RS2007 reads it as an AdditionalFile that the package adds itself. The project
+                // file's own note on that include describes the state where the package stops
+                // adding it; in that state this is the only thing still reading these headings.
+                Assert.True(
+                    Version.TryParse(release, out Version? parsed),
+                    $"AnalyzerReleases.Shipped.md declares '## Release {release}', which is not a version of the shape VersionPrefix carries.");
+
+                // The comparison this test exists for. Parsed rather than compared as text, so
+                // 0.10.0 is not read as older than 0.9.0.
+                Assert.True(
+                    parsed <= Version.Parse(declared),
+                    $"AnalyzerReleases.Shipped.md declares rules shipped in {release}, but this repository builds {declared}. Bump VersionPrefix, or file the rules under the release actually being cut.");
+            });
+
+        // Twice under one number is two different rule sets both claiming one release, which reads
+        // as a single release to anyone and to nothing as a conflict.
+        Assert.Equal(releases.Count, releases.Distinct(StringComparer.Ordinal).Count());
+
+        // What this deliberately cannot see: a NEW rule appended under an OLD heading. Deciding
+        // which rules are new to a build needs the previous build, which is not in this repository,
+        // and the release-tracking analyzer does not reach it either. Moving the unshipped rules
+        // under a heading for the version being cut stays a step someone takes deliberately.
+    }
+
+    [Theory]
+    // The shape the file actually ships.
+    [InlineData("## Release 0.1.0", "0.1.0")]
+    // Extra spacing after the hashes is still a heading to any Markdown reader.
+    [InlineData("##  Release  1.2.3", "1.2.3")]
+    public void The_release_heading_pattern_reads_the_version_the_heading_names(
+        string heading, string expected) =>
+        Assert.Equal(expected, ShippedReleaseHeading().Match(heading).Groups[1].Value);
+
+    [Theory]
+    // A deeper heading is a section inside a release, not a release.
+    [InlineData("### New Rules")]
+    // The words in prose. The file's own header comment is two such lines away from this shape.
+    [InlineData("; every rule is declared under a ## Release heading")]
+    // A heading naming no version at all: matched by nothing, so it cannot satisfy the guard above
+    // on a real heading's behalf.
+    [InlineData("## Release")]
+    public void A_line_that_is_not_a_release_heading_is_not_read_as_one(string line) =>
+        Assert.DoesNotMatch(ShippedReleaseHeading(), line);
+
     // ------------------------------------- the compiler-host floor, and the pin it is read from
 
     /// <summary>The Roslyn version this package compiles against, read back from the one file that

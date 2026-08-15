@@ -36,6 +36,35 @@
     <NoWarn>$(NoWarn);NU5128</NoWarn>
   </PropertyGroup>
 
+  <!-- ====================== Debuggability of the pack ==================== -->
+  <PropertyGroup>
+    <!-- Why: this package ships exactly ONE file a consumer's toolchain reads —
+         analyzers/dotnet/cs/Rendlio.Analyzers.dll — so the only debug information that can
+         reach anyone is debug information carried inside that assembly. A portable PDB is a
+         separate file, and `IncludeBuildOutput=false` plus a hand-written <None Include> for
+         the assembly means nothing else in bin/ is packed: the default leaves a consumer whose
+         build hits an analyzer crash with a stack trace of method tokens and nowhere to step.
+         Embedded costs ~6.5 KB on an 18 KB assembly and is still byte-reproducible across
+         clean runs, which is the one property this pack may not trade away.
+
+         A symbol package is not the alternative that was passed over — it is not available.
+         `-p:IncludeSymbols=true` on this project FAILS the pack with NU5017 ("cannot create a
+         package that has no dependencies nor content"), because the symbols NuGet would collect
+         are those of the build output this project deliberately does not pack. Embedding is the
+         only route debug information has into this package's one shipped file.
+
+         SourceLink needs no PackageReference: it is in-box from the .NET 8 SDK onward and
+         activates off the RepositoryUrl in Directory.Build.props, so the embedded PDB carries a
+         document map back to this repository whenever the checkout has a github.com remote.
+         Where it does not — a worktree whose origin is a local path — it degrades to an embedded
+         PDB with no map and warns about nothing, which is the correct failure for a convenience.
+         EmbedUntrackedSources is stated rather than inherited because the generated sources it
+         covers (AssemblyInfo, GlobalUsings) are in every stack trace through this assembly, and
+         an SDK default is not a promise this package gets to rely on. -->
+    <DebugType>embedded</DebugType>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+  </PropertyGroup>
+
   <ItemGroup>
     <!-- The compiler host supplies these at analysis time, so nothing is copied or flowed:
          ExcludeAssets="runtime" keeps the Roslyn binaries out of every consumer's output. -->

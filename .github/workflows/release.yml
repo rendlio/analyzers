@@ -23,7 +23,10 @@
 #
 # `workflow_dispatch` is the rehearsal: it runs every gate and uploads the .nupkg for
 # inspection, and skips authentication and publishing entirely. Use it to validate a version
-# before tagging it. (It could not publish even if it tried — the policy is scoped to push.)
+# before tagging it. (It could not publish even if it tried — the policy is scoped to push.) It
+# also REPORTS on the publishing identity without requiring one, because the identity guard is
+# scoped to a tag push and the variable it reads is the piece of a release most likely to be
+# missing — a rehearsal that could not mention it would be silent about the thing it exists for.
 
 name: release
 
@@ -87,9 +90,16 @@ jobs:
         run: dotnet test Rendlio.Analyzers.slnx --configuration Release --no-build --verbosity normal
 
   # ===========================================================================================
-  # Pack, prove the layout, publish. `needs: test` is what makes the gate above load-bearing:
+  # Pack, prove the package, publish. `needs: test` is what makes the gate above load-bearing:
   # a red test on either host means this job never starts, so nothing can be packed from a
   # commit that does not pass.
+  #
+  # "Prove the package" is two checks, and they answer different questions. The layout gate says the
+  # package contains exactly the entries it ships — the analyzer at the one path NuGet reads, and
+  # nothing else. The floor-host check installs it and watches both rules fire in the oldest
+  # compiler host the packed README promises, which is the only way to learn that the assembly at
+  # that path actually loads there. Both run on the commit being published rather than only on main:
+  # a version on nuget.org can be unlisted but never replaced.
   #
   # Formatting is deliberately NOT re-gated here. `dotnet format --verify-no-changes` runs in
   # ci.yml on the commit that reached main; blocking a release on a cosmetic rule that cannot
@@ -106,11 +116,23 @@ jobs:
       # Without it the token request fails and the login step has nothing to exchange.
       id-token: write
 
+    env:
+      # The lowest .NET SDK the README promises. Stated once for this job: the setup step installs
+      # it and the floor check below runs against it, and a test in tests/Rendlio.Analyzers.Tests
+      # fails the build if this stops matching the sentence on the README — which is the page packed
+      # INTO the artifact this job pushes.
+      SDK_FLOOR: '8.0.100'
+      FRAMEWORK_FLOOR: net8.0
+
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
+      # Two SDKs. The pinned one builds and packs; the floor one hosts the consumer the floor check
+      # installs into. global.json is named as well, so a bare `dotnet` in the worktree still
+      # resolves the repository's pin rather than the older SDK.
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
+          dotnet-version: ${{ env.SDK_FLOOR }}
           global-json-file: global.json
 
       - name: Restore
@@ -173,7 +195,7 @@ jobs:
           dotnet pack src/Rendlio.Analyzers/Rendlio.Analyzers.csproj --configuration Release --no-build
           -p:Version=${{ steps.version.outputs.version }} -p:Platform=AnyCPU --output ./artifacts
 
-      - name: Verify the analyzer is packaged where NuGet looks for it
+      - name: Verify the package contains exactly what it ships
         env:
           VERSION: ${{ steps.version.outputs.version }}
         shell: bash
@@ -188,18 +210,14 @@ jobs:
             exit 1
           fi
 
-          # Captured first rather than piped into grep: under `set -o pipefail`, `grep -q` exits at
-          # the first match and can SIGPIPE the producer, failing the step for the wrong reason.
-          listing=$(unzip -l "${nupkg}")
-          echo "${listing}"
-
-          # analyzers/dotnet/cs is the only path NuGet reads to install a C# analyzer. A package
-          # missing it installs cleanly, reports nothing, and is indistinguishable from a codebase
-          # that has no violations — which is why this is checked before the push and not after.
-          if ! grep -q 'analyzers/dotnet/cs/Rendlio.Analyzers.dll' <<< "${listing}"; then
-            echo "::error::${nupkg} has no analyzers/dotnet/cs/Rendlio.Analyzers.dll. NuGet reads that path and no other, so this package would install cleanly and analyse nothing. Check IncludeBuildOutput and the None/PackagePath item group in Rendlio.Analyzers.csproj."
-            exit 1
-          fi
+          # The same script ci.yml runs, and the same one a release manager runs by hand against
+          # the artifact a rehearsal uploaded. It asserts the package's ENTIRE entry list rather
+          # than searching it for the path that matters most: analyzers/dotnet/cs is the only path
+          # NuGet reads to install a C# analyzer, so a package missing it installs cleanly, reports
+          # nothing, and is indistinguishable from a codebase with no violations — and a package
+          # that has GAINED entries is the failure a search cannot see. Publishing is irreversible,
+          # so this is the last moment either can be caught.
+          bash eng/verify-package-layout.sh "${nupkg}"
 
       # Uploaded before the push so a dry run leaves the exact artifact a real release would have
       # published, for inspection.
@@ -209,6 +227,45 @@ jobs:
           name: nupkg
           path: ./artifacts/*.nupkg
           if-no-files-found: error
+
+      # The layout gate above proves the analyzer is at the path NuGet reads. Whether the assembly at
+      # that path is loaded by a real compiler and reports anything is a different question, and the
+      # README packed into this very artifact answers it with a promise: the lowest host it claims.
+      # ci.yml runs this on main, which is not the same as running it on the commit being published.
+      #
+      # Placed AFTER the upload deliberately, unlike the layout gate. This step installs the package
+      # and drives two builds, so it is the slowest thing here and the failure most worth having the
+      # artifact in hand for — a rehearsal that fell over on the floor host and took the .nupkg with
+      # it would leave nothing to diagnose. It still gates the push: every step below is a tag-push
+      # step, and a failed step here stops the job before any of them.
+      - name: Prove the analyzer loads and reports on the floor host
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: >
+          bash eng/verify-host-floor.sh
+          "./artifacts/Rendlio.Analyzers.${VERSION}.nupkg" "${SDK_FLOOR}" "${FRAMEWORK_FLOOR}"
+
+      # A rehearsal needs no publishing identity, and the guard below is correctly scoped to a tag
+      # push for that reason. The cost is that a green rehearsal says nothing about the one piece of
+      # configuration a rehearsal exists to de-risk: NUGET_USER lives outside this repository, so it
+      # is the setting most likely to be missing, and finding that out on the tag means re-cutting
+      # it. Reported rather than enforced — a dry run that failed on an identity it does not use
+      # would be a gate against nothing — so this reads the variable and says what a real tag would
+      # do, without becoming a reason the rehearsal cannot finish.
+      - name: Note whether a real release would find its publishing identity
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          NUGET_USER: ${{ vars.NUGET_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${NUGET_USER:-}" ]; then
+            echo "::warning::Repository variable NUGET_USER is not set, so a real tag push would stop at 'Confirm the publishing identity is configured' and publish nothing. Everything this rehearsal checks has passed; set the variable under Settings > Secrets and variables > Actions > Variables before tagging."
+          else
+            echo "NUGET_USER is set, so a real tag push would reach the publish step."
+          fi
 
       # ---- Everything below runs only for a tag push. -----------------------------------------
       - name: Confirm the publishing identity is configured

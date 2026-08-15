@@ -8,8 +8,13 @@
 #   3. The full test suite, including the conventions every shipped rule must satisfy.
 #   4. Formatting: `dotnet format --verify-no-changes` — the .editorconfig rules the
 #      compiler cannot see (charset, line endings, final newline, trailing whitespace).
-#   5. Pack: the analyzer assembly still lands at analyzers/dotnet/cs, which is the only
-#      path NuGet reads. A pack that silently stops producing it installs as a no-op.
+#   5. Pack: the package contains EXACTLY the entries it ships — the analyzer at
+#      analyzers/dotnet/cs, which is the only path NuGet reads, and nothing else. A pack that
+#      silently stops producing it installs as a no-op; one that gains a lib/ folder ships a
+#      reference assembly from a project whose whole point is that it ships no library.
+#   6. The floor host: the package, installed into a throwaway consumer under the lowest .NET
+#      SDK the README claims to support, still loads and still reports. Everything above runs
+#      on the SDK global.json pins, which is the other end of the supported range.
 #
 # This workflow needs NO secrets. Keep it that way: releasing is a separate workflow with
 # its own narrow permissions.
@@ -90,18 +95,15 @@ jobs:
           dotnet pack src/Rendlio.Analyzers/Rendlio.Analyzers.csproj --configuration Release --no-build
           -p:Platform=AnyCPU --output ./artifacts
 
-      - name: Verify the analyzer is packaged where NuGet looks for it
+      # The gate is a script rather than a shell block here so that both workflows run the same one
+      # and a package inspected by hand is inspected by the gate. It asserts the package's ENTIRE
+      # entry list, not just that the analyzer path is present: `-p:IncludeBuildOutput=true` adds a
+      # lib/ folder to a package whose whole point is that it ships no library, and a presence check
+      # exits 0 on that.
+      - name: Verify the package contains exactly what it ships
         if: matrix.os == 'ubuntu-latest'
         shell: bash
-        run: |
-          set -euo pipefail
-          nupkg=$(ls ./artifacts/Rendlio.Analyzers.*.nupkg)
-          echo "inspecting $nupkg"
-          # Captured first rather than piped into grep: under `set -o pipefail`, `grep -q` exits at
-          # the first match and can SIGPIPE the producer, failing the step for the wrong reason.
-          listing=$(unzip -l "$nupkg")
-          echo "$listing"
-          grep -q 'analyzers/dotnet/cs/Rendlio.Analyzers.dll' <<< "$listing"
+        run: bash eng/verify-package-layout.sh "$(ls ./artifacts/Rendlio.Analyzers.*.nupkg)"
 
       - name: Upload package
         if: matrix.os == 'ubuntu-latest'
@@ -110,3 +112,75 @@ jobs:
           name: nupkg
           path: ./artifacts/*.nupkg
           if-no-files-found: error
+
+  # =============================================================================================
+  # The lowest compiler host this package claims to support.
+  #
+  # The README tells a consumer they need "Visual Studio 2022 17.8 or .NET SDK 8.0.100 and
+  # upwards". Everything above runs on the SDK global.json pins, which is the OTHER end of that
+  # range — so until this job existed the floor was a sentence nobody had ever executed.
+  #
+  # A static argument gets most of the way: the package compiles against Roslyn 4.8, a test fails
+  # the build if the README's stated floor stops matching that pin, and compiling against 4.8 is
+  # what makes calling a post-4.8 API impossible. What it cannot reach is AD0001 — an analyzer
+  # that compiles and then throws inside an older host. That is a runtime property of one specific
+  # compiler host, and running it is the only way to learn it.
+  #
+  # Its own job rather than a leg of the matrix above: it needs a second SDK installed, it consumes
+  # the package instead of building the repository, and a failure here means something different
+  # from a failure there — the package is fine and the README's floor is wrong, or vice versa.
+  # =============================================================================================
+  host-floor:
+    name: host-floor (SDK ${{ matrix.sdk }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor the README states, and the framework a consumer on that SDK can target. Both
+        # move together or not at all, so they are one entry rather than two axes.
+        include:
+          - sdk: '8.0.100'
+            framework: net8.0
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # Both SDKs: the pinned one builds and packs this repository, the floor one hosts the
+      # consumer. global.json is listed last so the repository's pin is what a bare `dotnet` in the
+      # worktree resolves; the scratch consumer carries a global.json of its own naming the floor,
+      # with rollForward disabled so it cannot quietly roll up to the newer one.
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: ${{ matrix.sdk }}
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore Rendlio.Analyzers.slnx --locked-mode
+
+      - name: Build
+        run: dotnet build Rendlio.Analyzers.slnx --configuration Release --no-restore
+
+      # Platform for the reason the pack step above gives.
+      - name: Pack
+        run: >
+          dotnet pack src/Rendlio.Analyzers/Rendlio.Analyzers.csproj --configuration Release --no-build
+          -p:Platform=AnyCPU --output ./artifacts
+
+      # Installs the package into two throwaway consumers under the floor SDK and asserts both
+      # directions: one that breaks every documented rule must fail with RENDLIO001 and RENDLIO002,
+      # one that breaks none must build clean, and neither may report AD0001. An analyzer that has
+      # silently stopped loading is indistinguishable from a codebase with no violations, which is
+      # why the clean direction alone would not be a check.
+      - name: Prove the analyzer loads and reports on the floor host
+        env:
+          # Through the environment rather than interpolated into the script, matching the rule
+          # release.yml states: a `${{ }}` inside a `run:` block is pasted into the shell before it
+          # runs. These two are literals from this file, so nothing turns on it here — but the rule
+          # is worth less if it holds only where it is load-bearing.
+          SDK: ${{ matrix.sdk }}
+          FRAMEWORK: ${{ matrix.framework }}
+        shell: bash
+        run: >
+          bash eng/verify-host-floor.sh
+          "$(ls ./artifacts/Rendlio.Analyzers.*.nupkg)" "${SDK}" "${FRAMEWORK}"

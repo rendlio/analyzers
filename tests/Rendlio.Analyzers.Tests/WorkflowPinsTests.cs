@@ -337,18 +337,9 @@ public sealed class WorkflowPinsTests
         return commands;
     }
 
-    /// <summary>Every workflow file in this repository, in a stable order.</summary>
-    /// <remarks>
-    /// Both extensions, because GitHub accepts both and a rule that only knew about one would be
-    /// silently skippable by naming a file the other way.
-    /// </remarks>
-    private static List<string> WorkflowFiles()
-    {
-        string directory = Path.Combine(RepositoryLayout.Root, ".github", "workflows");
-
-        return Directory.EnumerateFiles(directory, "*.yml", SearchOption.TopDirectoryOnly)
-            .Concat(Directory.EnumerateFiles(directory, "*.yaml", SearchOption.TopDirectoryOnly))
-            .OrderBy(path => path, StringComparer.Ordinal)
-            .ToList();
-    }
+    /// <summary>
+    /// Every workflow file in this repository, in a stable order — resolved by
+    /// <see cref="RepositoryLayout"/>, which the pack-gate rules sweep too.
+    /// </summary>
+    private static List<string> WorkflowFiles() => RepositoryLayout.Workflows();
 }

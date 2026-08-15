@@ -38,6 +38,26 @@ internal static class RepositoryLayout
             .Where(path => !IsBuildOutput(path))
             .OrderBy(path => path, StringComparer.Ordinal)];
 
+    /// <summary>Every workflow file in this repository, in a stable order.</summary>
+    /// <remarks>
+    /// Both extensions, because GitHub accepts both and a rule enforced over one would be silently
+    /// skippable by naming a file the other way. Resolved here rather than in each test class that
+    /// sweeps workflows: the rules about action pins, about a pack step's platform and about the
+    /// gates that read a packed artifact are separate rules over the same set of files, and a
+    /// second copy of the walk is a second place for that set to quietly shrink.
+    /// </remarks>
+    internal static List<string> Workflows()
+    {
+        string directory = Path.Combine(Root, ".github", "workflows");
+
+        return
+        [
+            .. Directory.EnumerateFiles(directory, "*.yml", SearchOption.TopDirectoryOnly)
+                .Concat(Directory.EnumerateFiles(directory, "*.yaml", SearchOption.TopDirectoryOnly))
+                .OrderBy(path => path, StringComparer.Ordinal)
+        ];
+    }
+
     /// <summary>
     /// Every file called <paramref name="fileName"/> that a build here would find by walking up
     /// from a project, named relative to the root, in a stable order and without duplicates.
