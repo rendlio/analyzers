@@ -102,34 +102,47 @@ public sealed partial class ShippedTextTests
     // The same sentence hard-wrapped where the pages are wrapped. The qualifier routinely lands on
     // the next line, so this is the common case rather than an edge one.
     [InlineData("Rendlio is built by a Swiss association\nin formation, with profits pledged to charities.")]
+    // The same wrap written as a Markdown HARD break. This repository preserves the construct on
+    // purpose — .editorconfig turns trim_trailing_whitespace off for *.md precisely so the two
+    // trailing spaces survive — and Unwrap folds only the newline, leaving them. So the gap inside
+    // the phrase arrives at the pattern as THREE spaces, and any rule spelling it as one literal
+    // space quietly stops applying to a page that still reads correctly.
+    [InlineData("Rendlio is built by a Swiss association  \nin formation, with profits pledged to charities.")]
     public void Guard_accepts_the_identity_phrasing_these_pages_use(string page) =>
         Assert.Empty(ShippedText.Inspect("fixture.md", page));
 
+    // Every fixture below breaks a rule on purpose, and each one is written in whichever of two
+    // ways its rule allows — the distinction is worth stating once, because a sweep that greps this
+    // repository for banned vocabulary lands here and nowhere else.
+    //
+    //   - Where a rule matches a SHAPE, the fixture uses a stand-in and never the real thing: the
+    //     product names are fictitious, and the fidelity fixtures put nothing on the other side of
+    //     "against". Spelling the real ones out here would publish, in a file that ships, exactly
+    //     what those rules exist to keep off the pages.
+    //   - Where a rule matches a PHRASE, the fixture has to carry that phrase, because a guard
+    //     cannot prove it rejects something it does not contain. That is why "open source" appears
+    //     below, and why "oracle" does: there is no fictitious equivalent of a specific string.
+    //
+    // Either way these are inputs being fed to a rule, not statements about the engine.
     [Theory]
-    // The product name here is deliberately fictitious: a fixture only needs a name that is not the
-    // announced one, and naming a real unannounced product to test the rule would break it.
     [InlineData("Rendlio Widgets renders charts.", "not an announced product")]
     // Emphasis is how a page would style a name, not a way around the rule — a reader sees the same
-    // two words either way. The fictitious-name reasoning above applies to these as well, and both
-    // spellings of emphasis appear because they behave differently at the left edge: '_' is a word
-    // character and '*' is not.
+    // two words either way. Both spellings appear because they behave differently at the left edge:
+    // '_' is a word character and '*' is not.
     [InlineData("**Rendlio** Widgets renders charts.", "not an announced product")]
     [InlineData("*Rendlio Widgets* renders charts.", "not an announced product")]
     [InlineData("_Rendlio_ Widgets renders charts.", "not an announced product")]
-    // Fidelity comparison. Left as a bare shape with nothing on the other side of "against", for
-    // the reason the pattern itself gives: a fixture naming what output would be compared with
-    // would publish here exactly what the rule exists to keep off the pages.
     [InlineData("Output is scored against a reference implementation.", "not something these pages describe")]
     [InlineData("The oracle decides whether a render is correct.", "not something these pages describe")]
     // The association stated as though it already existed — a one-word edit from the phrasing that
     // is true, and one that reads perfectly well, which is the whole reason it is pinned.
     [InlineData("Rendlio is built by a Swiss association.", "presents as existing")]
-    // The two lines below are the only place in this repository that spells the banned phrasing
-    // out, and they have to: a guard that rejects a phrase cannot prove that it rejects it without
-    // containing it. Unlike every other fixture here there is no fictitious stand-in — the phrase
-    // IS the thing being rejected, so it cannot be stood in for. A publish-hygiene sweep grepping
-    // this repository will find these two occurrences and no others; they are fixture data being
-    // fed to a rule, not a statement about the engine.
+    // The same breach reached through a Markdown hard break, for both of the rules whose phrase
+    // spans more than one word. This is the direction that matters: a gap a pattern cannot cross
+    // does not make the guard noisy, it makes it SILENT. Both pages below are non-compliant, and
+    // both read exactly as they would after an ordinary rewrap.
+    [InlineData("Rendlio is built by a Swiss  \nassociation.", "presents as existing")]
+    [InlineData("The engine is open  \nsource.", "source-available")]
     [InlineData("The engine is open source.", "source-available")]
     [InlineData("The engine is open-source.", "source-available")]
     [InlineData("Rationale lives in docs/internal/design.md.", "means nothing to a reader")]
@@ -148,17 +161,26 @@ public sealed partial class ShippedTextTests
     /// The qualifier is the load-bearing half, and <see cref="ShippedText"/> already rejects the
     /// association stated without it — but a rule that rejects a wrong sentence cannot notice a
     /// sentence that is no longer there. This is the other half of it.
+    /// <para>
+    /// Gaps are <c>[ \t]+</c> for the reason <see cref="ShippedText.Unwrap"/> gives, and a pin is
+    /// where that matters most: this one carries a message naming the exact phrase it wants, so a
+    /// gap it cannot cross does not report a wrapping problem — it reports that the README stopped
+    /// saying something the README is still saying, and sends the next reader after prose that was
+    /// never edited.
+    /// </para>
     /// </remarks>
-    [GeneratedRegex(@"a Swiss association in formation", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"a[ \t]+Swiss[ \t]+association[ \t]+in[ \t]+formation", RegexOptions.CultureInvariant)]
     private static partial Regex AssociationInFormation();
 
     /// <summary>What this repository says happens to the profits.</summary>
     /// <remarks>
-    /// Deliberately loose about the verb and the plural, and anchored to no surrounding sentence:
-    /// it has to keep matching when the paragraph is reworded, or the pin becomes a tax on editing
-    /// prose rather than a guard on the commitment.
+    /// Deliberately loose about the verb and the plural, about the gaps between the words, and
+    /// anchored to no surrounding sentence: it has to keep matching when the paragraph is reworded,
+    /// or the pin becomes a tax on editing prose rather than a guard on the commitment — and
+    /// rewrapping a paragraph IS rewording it as far as this pattern can tell.
     /// </remarks>
-    [GeneratedRegex(@"profits (?:are )?pledged to charit(?:y|ies)", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"profits[ \t]+(?:are[ \t]+)?pledged[ \t]+to[ \t]+charit(?:y|ies)",
+        RegexOptions.CultureInvariant)]
     private static partial Regex ProfitsPledged();
 
     [Fact]
@@ -180,6 +202,26 @@ public sealed partial class ShippedTextTests
         Assert.True(
             ProfitsPledged().IsMatch(readme),
             "README.md no longer says the profits are pledged to charities.");
+    }
+
+    [Theory]
+    // The shape the README actually ships.
+    [InlineData("Rendlio is built by a Swiss association in formation, with profits pledged to charities.")]
+    // A soft wrap between the words of either phrase. The pages are wrapped at ~90 columns and this
+    // sentence sits at that width, so a rewrap lands here routinely.
+    [InlineData("built by a Swiss association\nin formation, with profits pledged to\ncharities.")]
+    // The same wrap written as a Markdown hard break — the case the pin above cannot test, because
+    // it reads the real README and cannot rewrap it. Unwrap folds the newline and leaves the two
+    // trailing spaces .editorconfig keeps, so the gap reaches the pattern as three spaces. Pinned
+    // here because the failure it guards against is not a false green but a LYING red: the phrase
+    // is still on the page, and a pattern that stopped matching it reports that it is gone.
+    [InlineData("built by a Swiss association  \nin formation, with profits pledged to  \ncharities.")]
+    public void The_identity_patterns_read_the_phrasing_however_the_paragraph_is_wrapped(string readme)
+    {
+        string unwrapped = ShippedText.Unwrap(readme);
+
+        Assert.Matches(AssociationInFormation(), unwrapped);
+        Assert.Matches(ProfitsPledged(), unwrapped);
     }
 
     [Theory]

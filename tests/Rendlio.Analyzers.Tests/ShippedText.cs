@@ -23,7 +23,14 @@ internal static partial class ShippedText
     /// preference about wording, so the phrase below must not appear on a page a reader could
     /// take as a statement about it.
     /// </summary>
-    [GeneratedRegex(@"\bopen[ \-]?source\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    /// <remarks>
+    /// The gap is quantified rather than a single optional character — see the note on
+    /// <see cref="Unwrap"/> for why every gap in this file has to be. Written as <c>[ \-]?</c> it
+    /// matched at most one character, so a hard break between the two words unwrapped to three
+    /// spaces and the rule stopped applying: the page still said the banned phrase and the guard
+    /// went green. That is the failure direction that matters here.
+    /// </remarks>
+    [GeneratedRegex(@"\bopen[ \t]*-?[ \t]*source\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex OpenSource();
 
     /// <summary>
@@ -90,8 +97,14 @@ internal static partial class ShippedText
     /// is exactly why nothing but a guard would catch it. Matched as a negative lookahead rather
     /// than by requiring the full phrase somewhere on the page, so a page that names the
     /// association twice cannot satisfy the rule once and breach it in the other place.
+    /// <para>
+    /// Every gap is <c>[ \t]+</c>, including the one inside the name itself — see the note on
+    /// <see cref="Unwrap"/>. A literal space there is not a false alarm waiting to happen but a
+    /// hole: a hard break between "Swiss" and "association" stops the rule matching at all, and the
+    /// unqualified claim it exists to catch goes through unreported.
+    /// </para>
     /// </remarks>
-    [GeneratedRegex(@"\bSwiss association\b(?![ \t]+in formation\b)",
+    [GeneratedRegex(@"\bSwiss[ \t]+association\b(?![ \t]+in[ \t]+formation\b)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex UnformedAssociation();
 
@@ -114,6 +127,17 @@ internal static partial class ShippedText
     /// Exposed rather than kept inside <see cref="Inspect"/> because the cases that pin a phrase
     /// POSITIVELY — the identity phrasing, say — have to fold the same way before looking for it,
     /// or the pin turns red the first time someone rewraps the paragraph carrying it.
+    /// <para>
+    /// <b>This is why every gap between words in this file is <c>[ \t]+</c> and never a literal
+    /// space.</b> Folding replaces the newline and nothing else, and two trailing spaces before a
+    /// newline are a Markdown hard break — a construct this repository preserves ON PURPOSE, which
+    /// is what <c>trim_trailing_whitespace = false</c> under <c>[*.md]</c> in <c>.editorconfig</c>
+    /// is for. So a hard break inside a phrase arrives here as THREE spaces, and a pattern spelling
+    /// that gap as one stops matching a page that has not changed meaning at all. Which way that
+    /// fails depends on the rule and neither way is acceptable: a rule that REJECTS a phrase goes
+    /// silently green on a page that still breaches it, and a pin that REQUIRES one goes red
+    /// claiming the page no longer says something it plainly still says. Do not narrow these back.
+    /// </para>
     /// </remarks>
     internal static string Unwrap(string text) => SoftWrap().Replace(text, " ");
 
