@@ -73,6 +73,15 @@ trap 'rm -rf "${scratch}"' EXIT
 # script's own process — nothing here writes to the machine's configuration.
 export DOTNET_NOLOGO=1
 
+# And the build output is read below by matching strings in it, so it has to be the language those
+# strings were written against. Every assertion here except the diagnostic-id ones is on English
+# prose: measured on this box, `DOTNET_CLI_UI_LANGUAGE=de dotnet build` on a failing project prints
+# `Fehler beim Buildvorgang.` while the diagnostic token itself stays English (`error CS0029`). So a
+# check for "Build succeeded" is satisfied by nothing on a localized host — and this script is
+# documented as one a release manager runs by hand, which is exactly where a non-English host turns
+# up. Same scope as the line above: this process only, overriding whatever the caller exported.
+export DOTNET_CLI_UI_LANGUAGE=en
+
 echo "verifying ${package} against SDK ${sdk} (${framework}) in ${scratch}"
 
 mkdir -p "${scratch}/feed"
@@ -234,12 +243,26 @@ assets="${scratch}/clean/obj/project.assets.json"
 
 # Separators normalised on the way out, because NuGet writes a Windows path into JSON with its
 # backslashes escaped.
+# `|| true` on both, and not as a shrug. Each is a reader over a JSON shape NuGet owns, not this
+# repository: `grep -o` finding nothing exits 1, `grep -c` counting nothing exits 1, and under
+# `set -euo pipefail` either would kill the script at the assignment — BEFORE the branch below can
+# say what went wrong. A gate that exits non-zero with no annotation is the failure the sibling
+# script's own comment calls the kind a reader acts on before noticing it is not the problem. Nothing
+# is tolerated by this: an empty result is caught immediately below and reported as what it is.
 folders=$(
   sed -n '/"packageFolders"/,/^  }/p' "${assets}" \
     | grep -oE '"[^"]+": \{\}' \
     | sed -E -e 's/^"(.*)": \{\}$/\1/' -e 's#\\\\#/#g'
-)
-folder_count=$(grep -c . <<< "${folders}")
+) || true
+folder_count=$(grep -c . <<< "${folders}") || true
+
+# NONE means the reader above stopped reading, which is a different problem from a failure of
+# isolation and gets said differently: an assets file always carries packageFolders, so zero is this
+# script failing to parse a shape that moved rather than a verdict about the run.
+if [ "${folder_count:-0}" -eq 0 ]; then
+  echo "::error::could not read any packageFolders entry out of ${assets}. That section is always written, so this is the reader in this script failing on a shape NuGet changed — not a verdict about the isolation." >&2
+  exit 1
+fi
 
 # Exactly one. More than one means a fallback folder is still in play — Visual Studio installs one
 # machine-wide and NUGET_FALLBACK_PACKAGES names another — so restore could have satisfied this id

@@ -239,15 +239,90 @@ public sealed partial class PackGateTests
         // And the same for the sweep: an empty set satisfies Assert.All.
         Assert.NotEmpty(running);
 
-        // Matched as text anywhere in the file rather than against one key, because the two
-        // workflows spell it differently — a matrix entry in one, a job-level env in the other — and
-        // a rule that knew only one spelling would go green on the file it could not read.
+        // Matched as text anywhere in the RUNNING part of the file rather than against one key,
+        // because the two workflows spell it differently — a matrix entry in one, a job-level env in
+        // the other — and a rule that knew only one spelling would go green on the file it could not
+        // read. Comments are cut first, which is the whole difference between this biting and not:
+        // ci.yml explains the floor in prose above the job, so the version appeared TWICE and the
+        // assertion was satisfied by the paragraph rather than by the value. Measured: with the
+        // matrix entry alone edited to 9.0.100 and the README untouched, this reported green.
         Assert.All(
             running,
             workflow => Assert.Contains(
                 stated.Groups[1].Value,
-                File.ReadAllText(Absolute(workflow)),
+                WorkflowInstructions(File.ReadAllText(Absolute(workflow))),
                 StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// <paramref name="workflowText"/> with its comments cut away — the part of a workflow that
+    /// actually runs.
+    /// </summary>
+    /// <remarks>
+    /// Every rule in this class is about what a workflow DOES, and a workflow's comments are the half
+    /// that does not. Leaving them in is how an assertion about a value gets satisfied by a paragraph
+    /// describing it, which is what happened to the floor-version pin above.
+    /// <para>
+    /// A <c>#</c> opens a comment in YAML only at the start of a line or after whitespace, which is
+    /// the rule applied here. What it does not know is quoting: <c>run: echo "a # b"</c> would lose
+    /// its tail. Deliberately left that way rather than grown into a YAML reader, because of the
+    /// direction it fails in — cutting too much can only make an assertion here go RED, never let one
+    /// pass on text it should not have read. Neither workflow has such a line today, and a false red
+    /// naming this method is a minute's work to understand; the failure this replaced was silent.
+    /// </para>
+    /// </remarks>
+    private static string WorkflowInstructions(string workflowText) =>
+        string.Join(
+            '\n',
+            workflowText
+                .Split('\n')
+                .Select(static line => YamlComment().Replace(line.TrimEnd('\r'), string.Empty)));
+
+    /// <summary>A YAML comment: a <c>#</c> at the start of a line or after whitespace, to the end.</summary>
+    [GeneratedRegex(@"(?:^|(?<=[ \t]))#.*$", RegexOptions.CultureInvariant)]
+    private static partial Regex YamlComment();
+
+    [Theory]
+    // The shape ci.yml actually carries, and the case that makes this method load-bearing: the
+    // version named in a comment and a DIFFERENT one on the value the job runs. Before comments were
+    // cut, the floor pin read this as naming 8.0.100 and reported green.
+    [InlineData(
+        "  # The README says .NET SDK 8.0.100 and upwards.\n        include:\n          - sdk: '9.0.100'",
+        "9.0.100")]
+    // The matrix spelling, uncommented.
+    [InlineData("          - sdk: '8.0.100'", "8.0.100")]
+    // The job-level env spelling release.yml uses. Both have to survive, or the rule goes green on
+    // whichever file it cannot read.
+    [InlineData("      SDK_FLOOR: '8.0.100'", "8.0.100")]
+    // A trailing comment on a value line: the value stays, the comment goes.
+    [InlineData("          - sdk: '8.0.100'  # was 9.0.100", "8.0.100")]
+    public void A_workflow_reads_as_the_values_it_runs_and_not_the_prose_around_them(
+        string workflow, string expected)
+    {
+        string instructions = WorkflowInstructions(workflow);
+
+        Assert.Contains(expected, instructions, StringComparison.Ordinal);
+
+        // The other half of each case: the version that appears ONLY in prose must be gone. Asserted
+        // rather than implied, because "contains the right one" is satisfied by a method that cuts
+        // nothing at all.
+        foreach (string commented in _fixtureVersions.Where(version => version != expected))
+        {
+            Assert.DoesNotContain(commented, instructions, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void A_hash_inside_a_value_is_not_read_as_a_comment_opener()
+    {
+        // The pinned action refs carry their version in a trailing comment, so the SHA has to survive
+        // while the comment goes — otherwise this method would strip the thing WorkflowPinsTests
+        // exists to read, and the two rules would disagree about what the file says.
+        Assert.Equal(
+            "      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+            WorkflowInstructions(
+                "      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0")
+                .TrimEnd());
     }
 
     /// <summary>The .NET SDK version the README names as the floor.</summary>
@@ -269,6 +344,112 @@ public sealed partial class PackGateTests
         Assert.Equal(
             expected,
             StatedSdkFloor().Match(ShippedText.Unwrap(sentence)).Groups[1].Value);
+
+    // --------------------------------------------- the gates, against the step that cannot be undone
+
+    /// <summary>The command that publishes, and the one irreversible thing this repository does.</summary>
+    private const string PublishCommand = "dotnet nuget push";
+
+    /// <summary>Naming a step's failure non-fatal, which is how a gate stops being one.</summary>
+    private const string NonFatal = "continue-on-error";
+
+    /// <summary>Both gates that read a packed artifact, in the order release.yml runs them.</summary>
+    private static readonly string[] _packGates = [LayoutGate, HostFloorGate];
+
+    /// <summary>The two versions the comment-stripping cases play against each other.</summary>
+    private static readonly string[] _fixtureVersions = ["8.0.100", "9.0.100"];
+
+    [Fact]
+    public void Both_pack_gates_run_before_the_step_that_publishes()
+    {
+        // Why this is a test and not a comment. `release.yml` places the floor gate AFTER *Upload
+        // package* on purpose, so a rehearsal that fails on the floor host still leaves the .nupkg to
+        // diagnose — and the entire justification for that placement being safe is that every step
+        // below it is a tag-push step. That is an ordering invariant, and until this test it was
+        // argued in a paragraph and pinned by nothing: moving the publish step above either gate, or
+        // marking a gate non-fatal, puts a package on nuget.org on the word of a check that did not
+        // run. Which is verbatim the failure this class exists to prevent, and a version there can be
+        // unlisted but never replaced.
+        //
+        // Comments cut first, so the paragraph making the argument cannot satisfy the assertion about
+        // it — the same trap the floor-version pin fell into.
+        string release = WorkflowInstructions(File.ReadAllText(Absolute(PublishingWorkflow)));
+
+        int publish = release.IndexOf(PublishCommand, StringComparison.Ordinal);
+
+        // Guards the guard. A rule enforced by locating a command reports green the moment the
+        // command is spelled differently, and "no publish step found" would otherwise satisfy every
+        // ordering assertion below by vacuum.
+        Assert.True(
+            publish >= 0,
+            $"{PublishingWorkflow} no longer runs '{PublishCommand}', so nothing below is checking what runs before the publish.");
+
+        foreach (string gate in _packGates)
+        {
+            // LAST occurrence, not first: a gate invoked twice has to be entirely before the push,
+            // and taking the first would let a second copy sit after it unnoticed.
+            int last = release.LastIndexOf(gate, StringComparison.Ordinal);
+
+            Assert.True(
+                last >= 0,
+                $"{PublishingWorkflow} no longer runs {gate}, so the package it pushes has nothing reading it.");
+
+            Assert.True(
+                last < publish,
+                $"{PublishingWorkflow} runs {gate} AFTER '{PublishCommand}'. A gate downstream of the publish is not a gate: the package is on nuget.org before it reports, and it cannot be replaced.");
+        }
+    }
+
+    [Fact]
+    public void No_step_in_the_publishing_workflow_declares_its_own_failure_survivable()
+    {
+        // The other way the ordering above stops meaning anything. `continue-on-error: true` on a
+        // gate step leaves the job green and carries on to the push, which is the same outcome as
+        // deleting the gate and looks like neither. Checked across the whole file rather than on the
+        // gate steps alone: no step in a workflow whose last act is irreversible has a reason to
+        // declare its own failure survivable, so the honest rule is that the key does not appear.
+        Assert.DoesNotContain(
+            NonFatal,
+            WorkflowInstructions(File.ReadAllText(Absolute(PublishingWorkflow))),
+            StringComparison.Ordinal);
+    }
+
+    [Theory]
+    // The order release.yml ships: both gates, then the push.
+    [InlineData(
+        "        run: bash eng/verify-package-layout.sh x\n"
+        + "        run: bash eng/verify-host-floor.sh x 8.0.100\n"
+        + "        run: dotnet nuget push y",
+        true)]
+    // The floor gate moved below the push — the edit this test exists to reject, and the one that
+    // reads as a harmless reshuffle in a diff.
+    [InlineData(
+        "        run: bash eng/verify-package-layout.sh x\n"
+        + "        run: dotnet nuget push y\n"
+        + "        run: bash eng/verify-host-floor.sh x 8.0.100",
+        false)]
+    // A gate run twice, the second time after the push. Taking the FIRST occurrence would call this
+    // clean.
+    [InlineData(
+        "        run: bash eng/verify-package-layout.sh x\n"
+        + "        run: bash eng/verify-host-floor.sh x 8.0.100\n"
+        + "        run: dotnet nuget push y\n"
+        + "        run: bash eng/verify-host-floor.sh x 8.0.100",
+        false)]
+    public void A_gate_below_the_publish_step_is_visible_to_the_ordering_rule(
+        string steps, bool expectedClean)
+    {
+        string instructions = WorkflowInstructions(steps);
+        int publish = instructions.IndexOf(PublishCommand, StringComparison.Ordinal);
+
+        bool clean = publish >= 0
+            && _packGates.All(
+                gate => instructions.LastIndexOf(gate, StringComparison.Ordinal) is int last
+                    && last >= 0
+                    && last < publish);
+
+        Assert.Equal(expectedClean, clean);
+    }
 
     // ------------------------------------------------- the gates as files a runner can execute
 
