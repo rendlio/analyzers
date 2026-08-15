@@ -60,6 +60,7 @@ public sealed class AnalyzerConventionTests
     [InlineData(typeof(ForeignIdAnalyzer), "is not of the form RENDLIO000")]
     [InlineData(typeof(UndocumentedAnalyzer), "HelpLinkUri")]
     [InlineData(typeof(InternallyWordedAnalyzer), "means nothing outside")]
+    [InlineData(typeof(UnconstructableAnalyzer), "public parameterless constructor")]
     public void Guard_rejects_a_non_compliant_analyzer(Type analyzer, string expected)
     {
         IReadOnlyList<string> violations = AnalyzerConventions.Inspect([analyzer]);
@@ -80,9 +81,16 @@ public sealed class AnalyzerConventionTests
     // Deliberately non-compliant analyzers. They exist only so the conventions above are
     // proven to fail on something; none of them is ever registered with a compilation.
 
+    /// <summary>
+    /// Stand-in help link. Deliberately NOT the real repository URL: a fixture only needs some
+    /// absolute URI, and hard-coding the live one here would silently couple the tests to a value
+    /// that is still being confirmed. `.invalid` is reserved by RFC 2606 and can never resolve.
+    /// </summary>
+    private const string FixtureHelpLink = "https://example.invalid/rules/RENDLIO900";
+
     private static DiagnosticDescriptor Descriptor(
         string id,
-        string helpLink = "https://github.com/Rendlio/analyzers/blob/main/docs/rules/RENDLIO900.md",
+        string helpLink = FixtureHelpLink,
         string message = "{0} is not allowed here",
         string description = "A fixture descriptor.") =>
         new(id, "Fixture rule", message, "Rendlio.Fixture", DiagnosticSeverity.Warning,
@@ -140,13 +148,29 @@ public sealed class AnalyzerConventionTests
             [Descriptor("RENDLIO903", message: "{0} is banned by FS-99 §1")];
     }
 
+    /// <summary>
+    /// Cannot be constructed the way Roslyn constructs analyzers, so the rule would never run.
+    /// </summary>
+    [DiagnosticAnalyzer(LanguageNames.CSharp)]
+    private sealed class UnconstructableAnalyzer : FixtureAnalyzer
+    {
+        public UnconstructableAnalyzer(string reason)
+        {
+            Reason = reason;
+        }
+
+        public string Reason { get; }
+
+        public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
+            [Descriptor("RENDLIO904")];
+    }
+
     /// <summary>Reuses RENDLIO900 for an unrelated rule.</summary>
     [DiagnosticAnalyzer(LanguageNames.CSharp)]
     private sealed class IdSquatterAnalyzer : FixtureAnalyzer
     {
         public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
             [new("RENDLIO900", "A different rule", "{0}", "Rendlio.Other", DiagnosticSeverity.Error,
-                isEnabledByDefault: true, description: "Another fixture.",
-                helpLinkUri: "https://github.com/Rendlio/analyzers/blob/main/docs/rules/RENDLIO900.md")];
+                isEnabledByDefault: true, description: "Another fixture.", helpLinkUri: FixtureHelpLink)];
     }
 }

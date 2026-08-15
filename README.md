@@ -77,7 +77,7 @@ Issues and pull requests are welcome. Two things worth knowing before you open o
 
 ## Licence
 
-Apache-2.0 — see [LICENSE](LICENSE).
+Apache-2.0 — see [LICENSE](https://github.com/Rendlio/analyzers/blob/main/LICENSE).
 
 This is a separate licence from the Rendlio Sheets engine itself, which is source-available
 under its own terms in its own repository. The two are licensed independently: taking these

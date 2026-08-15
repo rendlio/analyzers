@@ -17,8 +17,6 @@
     <!-- Roslyn's own rules for analyzer authors: no file/console/clock/process access from
          inside an analyzer (RS1035), correct TFM for a compiler extension (RS1041). -->
     <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
-    <!-- The tests drive the analyzers by reflection over this assembly. -->
-    <InternalsVisibleTo>Rendlio.Analyzers.Tests</InternalsVisibleTo>
   </PropertyGroup>
 
   <!-- ============================ Packaging ============================= -->

@@ -28,6 +28,13 @@ internal static partial class AnalyzerConventions
     /// build log — so they must not cite internal specifications, tracker ids or repository
     /// paths that the reader has no access to.
     /// </summary>
+    /// <remarks>
+    /// A ban list cannot enforce what it will not name, so this pattern is deliberately the one
+    /// place in the repository that spells out those internal conventions. The trade-off was taken
+    /// consciously rather than stumbled into, and it is bounded: the pattern names only the shape
+    /// of such a reference, never a real document, and the fixture that exercises the rule cites a
+    /// specification number that does not exist.
+    /// </remarks>
     [GeneratedRegex(@"\bFS-\d{2}\b|\bURS\b|docs/internal|\bwi-[0-9a-f]{8}\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex InternalReference();
@@ -57,9 +64,9 @@ internal static partial class AnalyzerConventions
                 continue;
             }
 
-            if (Activator.CreateInstance(type) is not DiagnosticAnalyzer instance)
+            DiagnosticAnalyzer? instance = TryCreate(type, violations);
+            if (instance is null)
             {
-                violations.Add($"{type.Name}: needs a public parameterless constructor.");
                 continue;
             }
 
@@ -78,6 +85,42 @@ internal static partial class AnalyzerConventions
         return violations;
     }
 
+    /// <summary>
+    /// Constructs <paramref name="type"/> the way Roslyn does, recording a violation rather than
+    /// propagating when it cannot be constructed.
+    /// </summary>
+    /// <remarks>
+    /// This has to be a catch and not a null check: <see cref="Activator.CreateInstance(Type)"/>
+    /// THROWS <see cref="MissingMethodException"/> for a type with no public parameterless
+    /// constructor, and wraps a throwing constructor in <see cref="TargetInvocationException"/> —
+    /// it does not return null for a reference type. Left uncaught, one unconstructable analyzer
+    /// would take down the whole run instead of reporting itself.
+    /// </remarks>
+    private static DiagnosticAnalyzer? TryCreate(Type type, List<string> violations)
+    {
+        try
+        {
+            if (Activator.CreateInstance(type) is DiagnosticAnalyzer created)
+            {
+                return created;
+            }
+
+            violations.Add($"{type.Name}: is not a {nameof(DiagnosticAnalyzer)}.");
+        }
+        catch (MissingMethodException)
+        {
+            // Roslyn instantiates analyzers itself, so a rule that needs constructor arguments
+            // never runs at all in a real build.
+            violations.Add($"{type.Name}: needs a public parameterless constructor.");
+        }
+        catch (TargetInvocationException ex)
+        {
+            violations.Add($"{type.Name}: its constructor threw {ex.InnerException?.GetType().Name ?? "an exception"}.");
+        }
+
+        return null;
+    }
+
     private static void InspectDescriptor(
         Type owner,
         DiagnosticDescriptor rule,
@@ -91,7 +134,13 @@ internal static partial class AnalyzerConventions
 
         // Two analyzers may share a descriptor instance; two *different* descriptors may not
         // share an id, or a consumer's suppression would silence a rule they never read about.
-        string fingerprint = $"{rule.Title}|{rule.Category}|{rule.DefaultSeverity}";
+        // NUL rather than a printable separator: a title may legally contain any punctuation, so
+        // a visible delimiter would let two unrelated descriptors fingerprint identically.
+        string fingerprint = string.Join(
+            '\0',
+            rule.Title.ToString(CultureInfo.InvariantCulture),
+            rule.Category,
+            rule.DefaultSeverity.ToString());
         if (idOwners.TryGetValue(rule.Id, out string? existing))
         {
             if (!string.Equals(existing, fingerprint, StringComparison.Ordinal))

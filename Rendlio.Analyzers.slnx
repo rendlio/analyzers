@@ -1,4 +1,16 @@
 <Solution>
+  <!--
+    Declared so the solution still builds when an ambient `Platform` environment variable is
+    set. A Visual Studio Developer Command Prompt exports `Platform=x64`, MSBuild promotes
+    environment variables to global properties, and a solution that names no such platform
+    fails with a cryptic MSB4126 about a configuration nobody wrote. The projects themselves
+    are AnyCPU; these entries only keep the solution addressable from that shell.
+  -->
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
   <Folder Name="/src/">
     <Project Path="src/Rendlio.Analyzers/Rendlio.Analyzers.csproj" />
   </Folder>

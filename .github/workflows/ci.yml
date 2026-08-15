@@ -74,8 +74,11 @@ jobs:
           set -euo pipefail
           nupkg=$(ls ./artifacts/Rendlio.Analyzers.*.nupkg)
           echo "inspecting $nupkg"
-          unzip -l "$nupkg"
-          unzip -l "$nupkg" | grep -q 'analyzers/dotnet/cs/Rendlio.Analyzers.dll'
+          # Captured first rather than piped into grep: under `set -o pipefail`, `grep -q` exits at
+          # the first match and can SIGPIPE the producer, failing the step for the wrong reason.
+          listing=$(unzip -l "$nupkg")
+          echo "$listing"
+          grep -q 'analyzers/dotnet/cs/Rendlio.Analyzers.dll' <<< "$listing"
 
       - name: Upload package
         if: matrix.os == 'ubuntu-latest'
