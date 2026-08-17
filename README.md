@@ -27,6 +27,32 @@ The [rules index](https://github.com/Rendlio/analyzers/blob/main/docs/rules/READ
 full list, and carries what is true of every rule rather than of one: how ids are allocated, what
 the two categories are for, the four ways to turn a rule off, and what each of them costs.
 
+## Installing
+
+```sh
+dotnet add package Rendlio.Analyzers
+```
+
+or, as a `PackageReference`:
+
+```xml
+<PackageReference Include="Rendlio.Analyzers" Version="0.1.0" PrivateAssets="all" />
+```
+
+`PrivateAssets="all"` keeps the analyzers out of your own package's dependencies: they check
+*your* build, and nobody who installs *you* should inherit them. `dotnet add package` writes it
+for you, because the package declares itself a development dependency.
+
+Expect the build to fail on the first run against a codebase that has never been held to these
+rules. Both are errors by default and there is nothing to switch on — installing the package is
+how you ask for that. The rules index linked above is how to scope one, downgrade it, or turn it
+off, and what each of those choices costs.
+
+The analyzer assembly loads into the compiler host rather than into your program, so nothing
+here reaches your output and your own target framework does not matter. What does matter is the
+host: this package builds against Roslyn 4.8, so it needs Visual Studio 2022 17.8 or .NET SDK
+8.0.100 and upwards.
+
 ## Why this exists
 
 Rendlio Sheets makes two promises about its rendering engine: it never phones home, and the
@@ -43,13 +69,6 @@ They are published here, free, because neither invariant is specific to a spread
 renderer. Air-gapped deployments, reproducible builds, offline licence verification, and any
 codebase audited for data egress all need exactly these two bans — and there is no reason to
 make anyone write them a second time.
-
-## Status
-
-Both rules and their tests are in this repository and build here. `Rendlio.Analyzers` is not
-on NuGet yet, so the way to use it today is to build the package from this repository; there
-is nothing to install from a feed. The conventions every rule must satisfy are enforced by the
-test suite (`tests/Rendlio.Analyzers.Tests`) rather than by review.
 
 ## Where the rules are developed
 

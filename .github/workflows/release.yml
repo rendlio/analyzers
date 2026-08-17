@@ -1,0 +1,223 @@
+# release.yml — publishes Rendlio.Analyzers to nuget.org.
+#
+# THE FILE NAME IS PART OF THE CREDENTIAL. nuget.org authenticates this workflow with a
+# Trusted Publishing policy that pins the repository *and the workflow file name*, so
+# renaming or moving this file does not break a setting somewhere — it revokes the only way
+# this repository can publish. Add jobs here; do not rename the file.
+#
+# There is no API key. Publishing authenticates over OIDC: GitHub mints a short-lived token
+# describing this exact repository and workflow, nuget.org validates it against the policy and
+# returns a temporary key that expires in an hour. Nothing to store, rotate or leak — so
+# `secrets` must never appear in this file, and a step that would print the temporary key is a
+# defect. See https://learn.microsoft.com/nuget/nuget-org/trusted-publishing.
+#
+# A release is a decision, not a consequence. The only thing that publishes is a human pushing
+# a version tag; a branch push, a merge or a schedule must never reach the push step.
+#
+# `workflow_dispatch` is the rehearsal: it runs every gate and uploads the .nupkg for
+# inspection, and skips authentication and publishing entirely. Use it to validate a version
+# before tagging it. (It could not publish even if it tried — the policy is scoped to push.)
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build and validate, without the leading "v". Nothing is published.'
+        required: true
+        type: string
+
+# Least privilege by default; the publish job adds the one permission it needs and no more.
+permissions:
+  contents: read
+
+# Two runs for one tag must not race to the same package version. Never cancel in flight: a run
+# killed between push and completion is the one state that is genuinely hard to reason about.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ===========================================================================================
+  # Gate. Publishing to nuget.org is irreversible — a version can be unlisted but never replaced
+  # or re-pushed — so every test runs, on both compiler hosts, before anything is packed.
+  # ===========================================================================================
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # Same two legs as ci.yml, for the same reason: an analyzer is loaded by whatever
+        # compiler host the consumer runs — .NET Framework under Visual Studio on Windows, .NET
+        # under `dotnet build` anywhere. Shipping on one leg's word ships a pack that is broken
+        # for half the people who install it.
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore Rendlio.Analyzers.slnx
+
+      - name: Build
+        run: dotnet build Rendlio.Analyzers.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test Rendlio.Analyzers.slnx --configuration Release --no-build --verbosity normal
+
+  # ===========================================================================================
+  # Pack, prove the layout, publish. `needs: test` is what makes the gate above load-bearing:
+  # a red test on either host means this job never starts, so nothing can be packed from a
+  # commit that does not pass.
+  #
+  # Formatting is deliberately NOT re-gated here. `dotnet format --verify-no-changes` runs in
+  # ci.yml on the commit that reached main; blocking a release on a cosmetic rule that cannot
+  # affect the produced package would be a gate with no failure it protects against.
+  # ===========================================================================================
+  publish:
+    name: publish
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # Lets this job ask GitHub for the OIDC token it trades for a temporary nuget.org key.
+      # Without it the token request fails and the login step has nothing to exchange.
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore Rendlio.Analyzers.slnx
+
+      - name: Resolve the version being released
+        id: version
+        env:
+          # Read through the environment rather than interpolated into the script below:
+          # `inputs.version` is attacker-controllable text on a public repository, and a `${{ }}`
+          # inside a `run:` block is pasted into the shell before it ever runs.
+          DISPATCH_VERSION: ${{ inputs.version }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${GITHUB_EVENT_NAME}" = 'workflow_dispatch' ]; then
+            version="${DISPATCH_VERSION:-}"
+          else
+            version="${TAG#v}"
+          fi
+
+          # Checked before it reaches MSBuild or a shell command line, so everything downstream
+          # is working with a known-shaped string rather than whatever was typed into a tag.
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'${version}' is not a version. Tag a release as v<major>.<minor>.<patch>, e.g. v0.1.0."
+            exit 1
+          fi
+
+          # The tag decides what the package is called; the project file decides what this commit
+          # says it is. They have no way to disagree except by mistake, and the mistake — tagging
+          # a version nobody bumped the project to — would publish a package whose own source
+          # claims a different version. Prerelease suffixes live only on the tag, so compare the
+          # release part.
+          declared=$(dotnet msbuild src/Rendlio.Analyzers/Rendlio.Analyzers.csproj \
+            -getProperty:VersionPrefix | tr -d '[:space:]')
+
+          if [ "${version%%-*}" != "${declared}" ]; then
+            echo "::error::Tagged ${version}, but Rendlio.Analyzers.csproj declares VersionPrefix ${declared}. Bump the project file and tag that commit."
+            exit 1
+          fi
+
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "Releasing ${version}."
+
+      - name: Build
+        run: >
+          dotnet build Rendlio.Analyzers.slnx --configuration Release --no-restore
+          -p:Version=${{ steps.version.outputs.version }}
+
+      - name: Pack
+        run: >
+          dotnet pack src/Rendlio.Analyzers/Rendlio.Analyzers.csproj --configuration Release --no-build
+          -p:Version=${{ steps.version.outputs.version }} --output ./artifacts
+
+      - name: Verify the analyzer is packaged where NuGet looks for it
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # By exact name, not a glob: this is also the check that the version actually landed on
+          # the artifact rather than on a command line nobody read the effect of.
+          nupkg="./artifacts/Rendlio.Analyzers.${VERSION}.nupkg"
+          if [ ! -f "${nupkg}" ]; then
+            echo "::error::Expected ${nupkg}; pack produced $(ls ./artifacts 2>/dev/null || echo 'nothing')."
+            exit 1
+          fi
+
+          # Captured first rather than piped into grep: under `set -o pipefail`, `grep -q` exits at
+          # the first match and can SIGPIPE the producer, failing the step for the wrong reason.
+          listing=$(unzip -l "${nupkg}")
+          echo "${listing}"
+
+          # analyzers/dotnet/cs is the only path NuGet reads to install a C# analyzer. A package
+          # missing it installs cleanly, reports nothing, and is indistinguishable from a codebase
+          # that has no violations — which is why this is checked before the push and not after.
+          grep -q 'analyzers/dotnet/cs/Rendlio.Analyzers.dll' <<< "${listing}"
+
+      # Uploaded before the push so a dry run leaves the exact artifact a real release would have
+      # published, for inspection.
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: nupkg
+          path: ./artifacts/*.nupkg
+          if-no-files-found: error
+
+      # ---- Everything below runs only for a tag push. -----------------------------------------
+      - name: Confirm the publishing identity is configured
+        if: github.event_name == 'push'
+        env:
+          NUGET_USER: ${{ vars.NUGET_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # A repository VARIABLE, not a secret — a nuget.org profile name is public, it just is
+          # not guessable, and keeping it out of this file means it can be corrected without
+          # editing the one file whose name the publishing policy pins. Checked here so an unset
+          # variable fails with this sentence instead of as an opaque authentication error one
+          # step later.
+          if [ -z "${NUGET_USER:-}" ]; then
+            echo "::error::Repository variable NUGET_USER is not set. Set it under Settings > Secrets and variables > Actions > Variables to the nuget.org profile name that owns the Trusted Publishing policy."
+            exit 1
+          fi
+
+      - name: Exchange the OIDC token for a short-lived nuget.org key
+        id: login
+        if: github.event_name == 'push'
+        uses: NuGet/login@v1
+        with:
+          user: ${{ vars.NUGET_USER }}
+
+      - name: Publish to nuget.org
+        if: github.event_name == 'push'
+        run: >
+          dotnet nuget push "./artifacts/Rendlio.Analyzers.${{ steps.version.outputs.version }}.nupkg"
+          --api-key ${{ steps.login.outputs.NUGET_API_KEY }}
+          --source https://api.nuget.org/v3/index.json
