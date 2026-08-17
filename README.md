@@ -43,10 +43,8 @@ or, as a `PackageReference`:
 *your* build, and nobody who installs *you* should inherit them. `dotnet add package` writes it
 for you, because the package declares itself a development dependency.
 
-Expect the build to fail on the first run against a codebase that has never been held to these
-rules. Both are errors by default and there is nothing to switch on — installing the package is
-how you ask for that. The rules index linked above is how to scope one, downgrade it, or turn it
-off, and what each of those choices costs.
+Expect the first build against a codebase that has never been held to these rules to fail. That
+is the package working rather than a misconfiguration.
 
 The analyzer assembly loads into the compiler host rather than into your program, so nothing
 here reaches your output and your own target framework does not matter. What does matter is the

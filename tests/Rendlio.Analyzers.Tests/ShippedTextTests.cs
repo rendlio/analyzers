@@ -470,6 +470,69 @@ public sealed partial class ShippedTextTests
         Assert.Empty(unknown);
     }
 
+    // ------------------------------------------- the install snippet, and the version it pins
+
+    /// <summary>The version this repository is currently building, read back from the one file
+    /// that declares it.</summary>
+    /// <remarks>
+    /// Read rather than repeated, for the same reason <see cref="RepositoryUrl"/> is: the package
+    /// takes its version from here too, so reading it is what keeps the check honest across a bump.
+    /// </remarks>
+    private static string DeclaredVersionPrefix =>
+        XDocument.Load(Path.Combine(RepositoryRoot, "src", "Rendlio.Analyzers", "Rendlio.Analyzers.csproj"))
+            .Descendants("VersionPrefix").Single().Value.Trim();
+
+    /// <summary>A <c>PackageReference</c> to this package, capturing the version it pins.</summary>
+    [GeneratedRegex(
+        @"<PackageReference\s+Include=""Rendlio\.Analyzers""[^>]*?\sVersion=""([^""]*)""",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex InstallSnippetVersion();
+
+    [Fact]
+    public void The_install_snippet_pins_the_version_this_repository_builds()
+    {
+        // The README is the PackageReadmeFile, so it is what nuget.org renders on EVERY version's
+        // listing — including versions published long after the line was written. The snippet is
+        // also the first thing a consumer copies rather than reads. Left uncoupled, cutting a
+        // release would leave the new listing telling people to install the previous one, and
+        // nothing would go red: a stale-but-valid version resolves and installs quietly.
+        string readme = File.ReadAllText(Path.Combine(RepositoryRoot, "README.md"));
+        string declared = DeclaredVersionPrefix;
+
+        var pinned = InstallSnippetVersion().Matches(readme)
+            .Select(static match => match.Groups[1].Value)
+            .ToList();
+
+        // Guards the guard: a README that stopped carrying the snippet, or a pattern that stopped
+        // matching it, would have nothing to disagree with and would report green forever.
+        Assert.NotEmpty(pinned);
+        Assert.All(pinned, version => Assert.Equal(declared, version));
+    }
+
+    [Theory]
+    // The shape the README actually ships.
+    [InlineData(@"<PackageReference Include=""Rendlio.Analyzers"" Version=""9.9.9"" PrivateAssets=""all"" />", "9.9.9")]
+    // Attribute order is not fixed by anything, so the pattern must not depend on it.
+    [InlineData(@"<PackageReference Include=""Rendlio.Analyzers"" PrivateAssets=""all"" Version=""9.9.9"" />", "9.9.9")]
+    public void The_install_snippet_pattern_reads_the_version_whatever_the_attribute_order(
+        string snippet, string expected)
+    {
+        Match match = InstallSnippetVersion().Match(snippet);
+
+        Assert.True(match.Success);
+        Assert.Equal(expected, match.Groups[1].Value);
+    }
+
+    [Fact]
+    public void The_install_snippet_pattern_ignores_a_reference_to_a_different_package()
+    {
+        // Otherwise a page showing how to install something else would be read as this package's
+        // pin and fail the build — or, worse, satisfy the guard above on its behalf.
+        Assert.DoesNotMatch(
+            InstallSnippetVersion(),
+            @"<PackageReference Include=""Rendlio.Analyzers.Extras"" Version=""9.9.9"" />");
+    }
+
     /// <summary>
     /// Stand-in repository. Deliberately not the live URL: a fixture only needs some repository to
     /// resolve against, and pinning the real one here would couple these cases to a value the

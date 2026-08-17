@@ -22,7 +22,10 @@ name: release
 
 on:
   push:
-    tags: ['v*']
+    # A digit after the v, so `vnext` or a `verify-…` branch tag does not start a release run that
+    # exists only to die at the shape check below. Still deliberately looser than the real grammar:
+    # anything that gets past this is rejected there, with a sentence saying what a tag should be.
+    tags: ['v[0-9]*']
   workflow_dispatch:
     inputs:
       version:
@@ -178,7 +181,10 @@ jobs:
           # analyzers/dotnet/cs is the only path NuGet reads to install a C# analyzer. A package
           # missing it installs cleanly, reports nothing, and is indistinguishable from a codebase
           # that has no violations — which is why this is checked before the push and not after.
-          grep -q 'analyzers/dotnet/cs/Rendlio.Analyzers.dll' <<< "${listing}"
+          if ! grep -q 'analyzers/dotnet/cs/Rendlio.Analyzers.dll' <<< "${listing}"; then
+            echo "::error::${nupkg} has no analyzers/dotnet/cs/Rendlio.Analyzers.dll. NuGet reads that path and no other, so this package would install cleanly and analyse nothing. Check IncludeBuildOutput and the None/PackagePath item group in Rendlio.Analyzers.csproj."
+            exit 1
+          fi
 
       # Uploaded before the push so a dry run leaves the exact artifact a real release would have
       # published, for inspection.
@@ -217,7 +223,16 @@ jobs:
 
       - name: Publish to nuget.org
         if: github.event_name == 'push'
-        run: >
-          dotnet nuget push "./artifacts/Rendlio.Analyzers.${{ steps.version.outputs.version }}.nupkg"
-          --api-key ${{ steps.login.outputs.NUGET_API_KEY }}
-          --source https://api.nuget.org/v3/index.json
+        env:
+          # Through the environment, for the reason stated above the version step: a `${{ }}` in a
+          # `run:` block is pasted into the shell before it runs. `NuGet/login` registers the key
+          # for masking so it does not reach the log either way — but the credential should not be
+          # the one exception to the rule this file states.
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet nuget push "./artifacts/Rendlio.Analyzers.${VERSION}.nupkg" \
+            --api-key "${NUGET_API_KEY}" \
+            --source https://api.nuget.org/v3/index.json
