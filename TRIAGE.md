@@ -4,9 +4,10 @@
 broken promise. This page is the posture: what happens to an issue you open, what is in
 and out of scope, and how priorities get decided when they conflict.
 
-It applies from the first published release onward. Today the pack has no released version
-(the [README](README.md) says so plainly), so a report about a rule can be recorded and
-answered, but not yet fixed in a version you can install.
+It applies from the first published release onward, and that release exists: the pack is on
+nuget.org and installable today. So a report about a rule can be recorded, answered, and
+fixed in a version you can install — always a new version, because a published one can be
+unlisted but never replaced.
 
 ## Where to report
 

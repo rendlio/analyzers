@@ -1213,6 +1213,94 @@ public sealed partial class ShippedTextTests
             @"<PackageReference Include=""Rendlio.Analyzers.Extras"" Version=""9.9.9"" />");
     }
 
+    // ------------------------------------ release status, and the claim no page can make again
+
+    /// <summary>A claim that this package has never been released.</summary>
+    /// <remarks>
+    /// Aimed at one claim rather than at the subject of release status, which is the difference
+    /// between a rule and a tax on editing prose. Both policies legitimately ask a reporter to keep
+    /// a detail quiet "until there is a release to upgrade to", and the triage policy scopes itself
+    /// "from the first published release onward" — every one of those is about the release a fix
+    /// arrives in, not about whether the pack has one, and a pattern reading for the subject would
+    /// fire on all of them.
+    /// <para>
+    /// It is blind to the SUBJECT, though, and knowingly so: nothing inside "not yet published"
+    /// says whether the unpublished thing is the pack or one fix, so a page reaching for that
+    /// phrasing about a fix fails here too. That is the rule biting rather than a defect — the
+    /// settled wording for the fix case is the sentences above, which both policies already use —
+    /// and if a page genuinely needs one of these phrases, the fix is to widen this knowingly, the
+    /// way the suppression walk is widened.
+    /// </para>
+    /// <para>
+    /// Every gap is <c>[ \t]+</c> for the reason <see cref="ShippedText.Unwrap"/> gives, and the
+    /// direction it fails in is the bad one: this rule REJECTS a phrase, so a gap that stops
+    /// matching leaves the page still saying it and the guard still green.
+    /// </para>
+    /// </remarks>
+    [GeneratedRegex(
+        @"\b(?:no[ \t]+(?:released|published)[ \t]+(?:version|release)"
+        + @"|not[ \t]+yet[ \t]+(?:released|published)"
+        + @"|never[ \t]+been[ \t]+(?:released|published)|unreleased)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex UnreleasedClaim();
+
+    [Fact]
+    public void No_published_page_claims_the_pack_has_never_been_released()
+    {
+        // The passage this replaces told a reader the pack had no released version and cited the
+        // README for it — which the README never said, so the sentence was wrong on the day it was
+        // written rather than drifted into. It is wrong twice over now that a version is on the
+        // feed, and releases do not un-happen: this is a claim no page here can ever correctly make
+        // again, which is what makes it worth a rule rather than a proofread.
+        List<string> claims = [];
+        int pagesRead = 0;
+
+        foreach (string page in PublishedPages())
+        {
+            pagesRead++;
+            string relativePage = Normalise(Path.GetRelativePath(RepositoryRoot, page));
+
+            foreach (Match match in
+                     UnreleasedClaim().Matches(ShippedText.Unwrap(File.ReadAllText(page))))
+            {
+                claims.Add($"{relativePage}: says '{match.Value}'; this package is published.");
+            }
+        }
+
+        // Guards the guard: a walk that stopped finding pages would report green over nothing.
+        Assert.NotEqual(0, pagesRead);
+        Assert.Empty(claims);
+    }
+
+    [Theory]
+    // The sentence that shipped on the triage policy, and the one this rule exists for.
+    [InlineData("Today the pack has no released version, so a report cannot be fixed yet.")]
+    // The rewordings that mean the same thing, so getting past the rule takes more than a synonym.
+    [InlineData("The pack is not yet published.")]
+    [InlineData("It has never been released.")]
+    [InlineData("This is an unreleased package.")]
+    // Hard-wrapped where these pages wrap. Two trailing spaces are a Markdown hard break that
+    // .editorconfig preserves on purpose, so the gap reaches the matcher as three spaces.
+    [InlineData("Today the pack has no  \nreleased version.")]
+    public void Guard_catches_a_claim_that_the_pack_has_never_been_released(string page)
+    {
+        // Proves this pattern bites on its own rather than through the walk above, which passes
+        // over every page and would stay green if this one rule quietly stopped matching anything.
+        Assert.Matches(UnreleasedClaim(), ShippedText.Unwrap(page));
+    }
+
+    [Theory]
+    // What both policies actually say. A fix that has not shipped yet is the subject here; the
+    // pack's own release status is not, and a rule that could not tell them apart would turn the
+    // published pages red for saying something true.
+    [InlineData("keep the detail off any public thread until there is a release to upgrade to")]
+    [InlineData("A confirmed bug enters the queue and ships in the next release.")]
+    [InlineData("It applies from the first published release onward.")]
+    public void Guard_leaves_a_page_alone_for_naming_the_release_a_fix_arrives_in(string page)
+    {
+        Assert.DoesNotMatch(UnreleasedClaim(), ShippedText.Unwrap(page));
+    }
+
     // ------------------------------------- the compiler-host floor, and the pin it is read from
 
     /// <summary>The Roslyn version this package compiles against, read back from the one file that
