@@ -1,0 +1,86 @@
+# ci.yml — pull-request and main CI for Rendlio.Analyzers.
+#
+# Gates enforced here:
+#   1. Build with warnings-as-errors, on Linux and Windows.
+#   2. The full test suite, including the conventions every shipped rule must satisfy.
+#   3. Formatting: `dotnet format --verify-no-changes` — the .editorconfig rules the
+#      compiler cannot see (charset, line endings, final newline, trailing whitespace).
+#   4. Pack: the analyzer assembly still lands at analyzers/dotnet/cs, which is the only
+#      path NuGet reads. A pack that silently stops producing it installs as a no-op.
+#
+# This workflow needs NO secrets. Keep it that way: releasing is a separate workflow with
+# its own narrow permissions.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: this workflow only reads the repository.
+permissions:
+  contents: read
+
+# A new push to a pull request cancels its in-flight run; runs on main are never cancelled.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build-test:
+    name: build-test
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # An analyzer is loaded by whatever compiler host the consumer runs — .NET Framework
+        # under Visual Studio on Windows, .NET under `dotnet build` anywhere. Both legs run
+        # because a pack that only builds on one of them is a pack that breaks for half its
+        # consumers.
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The SDK version is pinned by global.json at the repository root.
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore Rendlio.Analyzers.slnx
+
+      - name: Build
+        run: dotnet build Rendlio.Analyzers.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test Rendlio.Analyzers.slnx --configuration Release --no-build --verbosity normal
+
+      # The remaining gates are host-independent, so they run once rather than per leg.
+      - name: Format check (.editorconfig)
+        if: matrix.os == 'ubuntu-latest'
+        run: dotnet format Rendlio.Analyzers.slnx --verify-no-changes --verbosity diagnostic
+
+      - name: Pack
+        if: matrix.os == 'ubuntu-latest'
+        run: dotnet pack src/Rendlio.Analyzers/Rendlio.Analyzers.csproj --configuration Release --no-build --output ./artifacts
+
+      - name: Verify the analyzer is packaged where NuGet looks for it
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          nupkg=$(ls ./artifacts/Rendlio.Analyzers.*.nupkg)
+          echo "inspecting $nupkg"
+          unzip -l "$nupkg"
+          unzip -l "$nupkg" | grep -q 'analyzers/dotnet/cs/Rendlio.Analyzers.dll'
+
+      - name: Upload package
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nupkg
+          path: ./artifacts/*.nupkg
+          if-no-files-found: error

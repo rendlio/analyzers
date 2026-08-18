@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <!-- The compiler API, so the fixtures below can declare real DiagnosticAnalyzer types.
+         Rendlio.Analyzers itself takes this with ExcludeAssets="runtime" (the compiler host
+         supplies it there), so this project needs its own copy at run time. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- A plain reference, NOT OutputItemType="Analyzer": this project inspects and drives
+         the analyzers, it is not analysed by them. -->
+    <ProjectReference Include="../../src/Rendlio.Analyzers/Rendlio.Analyzers.csproj" />
+  </ItemGroup>
+
+</Project>

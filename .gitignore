@@ -1,0 +1,30 @@
+# ---- Build outputs ----------------------------------------------------------
+bin/
+obj/
+artifacts/
+publish/
+*.binlog
+*.nupkg
+*.snupkg
+
+# ---- Test & coverage --------------------------------------------------------
+TestResults/
+coverage/
+*.trx
+*.coverage
+*.cobertura.xml
+
+# ---- Local NuGet feed used when testing the pack against a real consumer -----
+local-feed/
+
+# ---- Editors & IDEs ---------------------------------------------------------
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.DotSettings.user
+
+# ---- OS ---------------------------------------------------------------------
+.DS_Store
+Thumbs.db

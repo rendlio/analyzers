@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Central package management. Every <PackageReference> in the repo takes its version
+  from this file — project files carry NO Version attributes.
+
+  DEPENDENCY POLICY: this package is Apache-2.0 and ships to strangers, so every
+  dependency must be MIT / Apache-2.0 / BSD. The shipping surface is deliberately
+  empty: Rendlio.Analyzers takes the compiler API with ExcludeAssets="runtime" (the
+  Roslyn host supplies it) and packs no dependencies at all.
+-->
+<Project>
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <ItemGroup Label="Roslyn">
+    <!-- MIT. Pinned DELIBERATELY BELOW the version the engine repo builds against:
+         an analyzer assembly must load in the *oldest* compiler host it claims to
+         support, and referencing 4.8.x keeps this pack working from VS 2022 17.8 /
+         .NET SDK 8.0.100 onward. Raising this pin is a consumer-visible breaking
+         change — it drops every host older than the new floor. -->
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0" />
+    <!-- MIT. The RS* rules for analyzer authors (RS1035 no I/O or clock inside an
+         analyzer, RS1041 correct TFM, RS2008 release tracking). -->
+    <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Tests">
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <!-- Apache-2.0. xunit v2 to match the convention in the engine repo, so a test
+         moving between the two repositories does not change assertion dialect. -->
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.0" />
+  </ItemGroup>
+
+</Project>

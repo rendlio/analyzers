@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Rendlio.Analyzers/Rendlio.Analyzers.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Rendlio.Analyzers.Tests/Rendlio.Analyzers.Tests.csproj" />
+  </Folder>
+</Solution>

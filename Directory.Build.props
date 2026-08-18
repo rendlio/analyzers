@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Directory.Build.props — repo-wide MSBuild defaults for Rendlio.Analyzers.
+
+  This repository publishes one package (Rendlio.Analyzers) and the tests that hold it
+  to its conventions. Nothing else lives here, so the defaults below are deliberately
+  short: identity, warnings-as-errors, and the determinism switches a pack that is
+  *about* determinism ought to set on itself.
+-->
+<Project>
+
+  <!-- ======================= Identity & packaging ======================= -->
+  <PropertyGroup>
+    <Authors>Rendlio</Authors>
+    <Company>Rendlio</Company>
+    <Product>Rendlio.Analyzers</Product>
+    <Copyright>© Rendlio contributors. Licensed under the Apache License, Version 2.0.</Copyright>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/Rendlio/analyzers</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <!-- Nothing packs by default; src/Rendlio.Analyzers opts in. -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!-- ===================== Language & compiler ========================== -->
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Features>strict</Features>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningLevel>9999</WarningLevel>
+    <AnalysisLevel>latest-Recommended</AnalysisLevel>
+    <CodeAnalysisTreatWarningsAsErrors>true</CodeAnalysisTreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <!-- GenerateDocumentationFile stays on repo-wide because IDE0005 (unnecessary
+         usings) only fires in build when it is on. CS1591 (missing XML doc) is off:
+         an analyzer assembly has no API a consumer calls — its documentation is the
+         per-rule help link every descriptor carries, which the tests enforce. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <!-- ===================== Reproducible output ========================== -->
+  <PropertyGroup>
+    <!-- Why: this pack exists to prove determinism in someone else's build, so its own
+         output is byte-reproducible from a given commit. ContinuousIntegrationBuild
+         normalises the absolute paths the compiler would otherwise embed; it is CI-only
+         because it also breaks local debugger source resolution. -->
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+</Project>

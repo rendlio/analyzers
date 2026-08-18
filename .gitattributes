@@ -1,0 +1,8 @@
+# LF in the repository and in every checkout. Matches the convention used across
+# the other Rendlio repositories.
+* text=auto eol=lf
+
+# Windows launchers require CRLF to execute correctly.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=lf

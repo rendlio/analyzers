@@ -1,0 +1,63 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Rendlio.Analyzers — two compiler-enforced bans: network APIs, and APIs whose result
+    depends on when or where the build runs.
+
+    The rule implementations are developed in the Rendlio engine repository and land here
+    on release; see README.md ("Where the rules are developed"). This project file is the
+    published shape they land into — target framework, packaging layout and the analyzer
+    author rules they must satisfy.
+  -->
+  <PropertyGroup>
+    <!-- A Roslyn host loads analyzer assemblies into the compiler process, which may be
+         .NET Framework (VS) or .NET (dotnet build). netstandard2.0 is the only TFM both
+         can load — a host requirement, not a policy choice. RS1041 enforces it. -->
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <!-- Roslyn's own rules for analyzer authors: no file/console/clock/process access from
+         inside an analyzer (RS1035), correct TFM for a compiler extension (RS1041). -->
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <!-- The tests drive the analyzers by reflection over this assembly. -->
+    <InternalsVisibleTo>Rendlio.Analyzers.Tests</InternalsVisibleTo>
+  </PropertyGroup>
+
+  <!-- ============================ Packaging ============================= -->
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>Rendlio.Analyzers</PackageId>
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <Description>Roslyn analyzers that ban network APIs and non-deterministic APIs in .NET code. These are how Rendlio proves zero phone-home and byte-identical output on its own engine code at compile time; they are published free for anyone with the same requirements.</Description>
+    <PackageTags>roslyn;analyzers;analyzer;determinism;reproducible-builds;no-network;offline;banned-api;codeanalysis</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <!-- An analyzer is a build-time tool: it must not flow to a consumer's consumers, and
+         it ships no library for anyone to compile against. -->
+    <DevelopmentDependency>true</DevelopmentDependency>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <!-- NU5128: the package carries no lib/ folder by design (analyzers/ only). -->
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The compiler host supplies these at analysis time, so nothing is copied or flowed:
+         ExcludeAssets="runtime" keeps the Roslyn binaries out of every consumer's output. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" PrivateAssets="all" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" PrivateAssets="all"
+                      IncludeAssets="runtime; build; native; contentfiles; analyzers; buildtransitive" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Release tracking (RS2008): every rule id this assembly reports is declared in one of
+         these two files, so adding or retiring a rule is a reviewable diff. -->
+    <AdditionalFiles Include="AnalyzerReleases.Shipped.md" />
+    <AdditionalFiles Include="AnalyzerReleases.Unshipped.md" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- analyzers/dotnet/cs is the path NuGet reads to install a C# analyzer; anything
+         elsewhere in the package is inert. -->
+    <None Include="$(OutputPath)$(AssemblyName).dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)../../README.md" Pack="true" PackagePath="/" Visible="false" />
+  </ItemGroup>
+
+</Project>
