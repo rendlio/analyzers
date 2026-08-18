@@ -713,6 +713,154 @@ public sealed partial class ShippedTextTests
         Assert.False(File.Exists(Path.Combine(RepositoryRoot, target)));
     }
 
+    [Fact]
+    public void Every_anchor_a_published_page_points_at_is_a_heading_that_exists()
+    {
+        // The other half of the link check above, and the half that fails silently. That one proves
+        // the FILE is there; a fragment naming a heading that has since been reworded still resolves
+        // to that file, so nothing 404s — GitHub simply drops the reader at the top of the page and
+        // says nothing. The resolver strips fragments on purpose, so before this case nothing read
+        // them at all.
+        //
+        // Load-bearing rather than tidy: the security policy sends a reporter to
+        // TRIAGE.md#response-expectations for the acknowledgment window it promises them, and to
+        // #in-scope for what to report in public instead. Editing a heading in the triage policy is
+        // an ordinary thing to do, and it is the reader chasing a commitment who pays for it.
+        List<string> broken = [];
+        int anchorsChecked = 0;
+
+        foreach (string page in PublishedPages())
+        {
+            string relativePage = Normalise(Path.GetRelativePath(RepositoryRoot, page));
+
+            foreach ((string target, string fragment) in
+                     PageLinks.RepositoryAnchors(relativePage, File.ReadAllText(page), RepositoryUrl))
+            {
+                string resolved = Path.Combine(RepositoryRoot, target);
+
+                // A target that is not a Markdown page here has no headings to name, and one that is
+                // missing entirely is the neighbouring case's business rather than this one's.
+                if (!target.EndsWith(".md", StringComparison.OrdinalIgnoreCase) || !File.Exists(resolved))
+                {
+                    continue;
+                }
+
+                anchorsChecked++;
+
+                if (!Headings(File.ReadAllText(resolved)).Contains(fragment, StringComparer.Ordinal))
+                {
+                    broken.Add(
+                        $"{relativePage}: links to '{target}#{fragment}', but no heading there has that anchor.");
+                }
+            }
+        }
+
+        // Guards the guard, for the reason the link walk is guarded: an extractor that stopped
+        // matching would leave nothing to check and report green forever.
+        Assert.NotEqual(0, anchorsChecked);
+        Assert.Empty(broken);
+    }
+
+    /// <summary>A Markdown ATX heading, capturing its text.</summary>
+    /// <remarks>
+    /// Requires whitespace after the hashes, which is what separates a heading from the
+    /// <c>#pragma</c> and <c>#nullable</c> lines the code samples on these pages carry.
+    /// </remarks>
+    [GeneratedRegex(@"^[ \t]{0,3}#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$",
+        RegexOptions.Multiline | RegexOptions.CultureInvariant)]
+    private static partial Regex Heading();
+
+    /// <summary>Anything GitHub drops from a heading when it builds the anchor for it.</summary>
+    /// <remarks>
+    /// Letters, digits, spaces, hyphens and underscores survive; everything else — backticks, the
+    /// full stop in <c>Rendlio.Analyzers</c>, punctuation — is removed rather than replaced, and
+    /// spaces then become hyphens. That is GitHub's slug, and it is worth reproducing rather than
+    /// guessing at: a heading whose anchor is not the one the writer assumed is exactly the case
+    /// this guard exists to catch.
+    /// </remarks>
+    [GeneratedRegex(@"[^\p{L}\p{Nd} \-_]", RegexOptions.CultureInvariant)]
+    private static partial Regex NotInAnAnchor();
+
+    /// <summary>The anchor GitHub gives every heading in <paramref name="markdown"/>.</summary>
+    private static IEnumerable<string> Headings(string markdown) =>
+        Heading().Matches(markdown)
+            .Select(static match => NotInAnAnchor()
+                .Replace(match.Groups[1].Value.ToLowerInvariant(), string.Empty)
+                .Replace(' ', '-'));
+
+    [Theory]
+    // The two headings the security policy actually points at.
+    [InlineData("## Response expectations", "response-expectations")]
+    [InlineData("## In scope", "in-scope")]
+    // Punctuation is dropped rather than replaced, so a heading naming the package loses its dot.
+    [InlineData("# `Rendlio.Analyzers` security", "rendlioanalyzers-security")]
+    [InlineData("### What happens next?", "what-happens-next")]
+    public void A_heading_gets_the_anchor_github_would_give_it(string heading, string expected) =>
+        Assert.Equal(expected, Assert.Single(Headings(heading)));
+
+    [Theory]
+    // A directive in one of the code samples these pages carry, which is not a heading. Without the
+    // whitespace requirement each of these would be read as one, and the anchors on a page would be
+    // checked against headings nobody wrote.
+    [InlineData("#nullable enable")]
+    [InlineData("#pragma warning disable RENDLIO001")]
+    public void A_line_that_only_looks_like_a_heading_is_not_read_as_one(string line) =>
+        Assert.Empty(Headings(line));
+
+    [Theory]
+    // An anchor on a page beside the one linking to it: the shape the security policy ships.
+    [InlineData("README.md", "the [window](TRIAGE.md#response-expectations).", "TRIAGE.md", "response-expectations")]
+    // The absolute spelling a page that ships inside the package has to use.
+    [InlineData(
+        "README.md",
+        "the [scope](https://example.invalid/owner/repo/blob/main/TRIAGE.md#in-scope).",
+        "TRIAGE.md",
+        "in-scope")]
+    // An anchor with no path in front of it names a heading on the page carrying it.
+    [InlineData("TRIAGE.md", "see [what is in scope](#in-scope).", "TRIAGE.md", "in-scope")]
+    // Resolved against the directory holding the page, as a path is.
+    [InlineData("docs/public/guide.md", "a [sibling](other.md#usage).", "docs/public/other.md", "usage")]
+    public void An_anchored_link_resolves_to_the_page_and_heading_it_names(
+        string page,
+        string markdown,
+        string expectedPath,
+        string expectedFragment)
+    {
+        PageLinks.AnchoredTarget anchored =
+            Assert.Single(PageLinks.RepositoryAnchors(page, markdown, FixtureRepositoryUrl));
+
+        Assert.Equal(expectedPath, anchored.Path);
+        Assert.Equal(expectedFragment, anchored.Fragment);
+    }
+
+    [Theory]
+    // No anchor: the link check proper already covers the file, and there is no heading to read.
+    [InlineData("read the [policy](TRIAGE.md).")]
+    // A bare '#' names nothing.
+    [InlineData("read the [policy](TRIAGE.md#).")]
+    // Someone else's site. Their headings are not ours to hold, and this repository does not get to
+    // fail its own build over a rename on learn.microsoft.com.
+    [InlineData("[trusted publishing](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing#how)")]
+    public void A_link_with_no_anchor_in_this_repository_is_left_alone(string markdown) =>
+        Assert.Empty(PageLinks.RepositoryAnchors("README.md", markdown, FixtureRepositoryUrl));
+
+    [Fact]
+    public void An_anchor_that_names_no_heading_is_visible_to_the_check()
+    {
+        // Proves the walk above bites, the way the broken-link fixture does for paths: a bad
+        // fragment has to survive resolution and then fail to match a heading. Without this, an
+        // extractor that silently dropped anchors would report green forever. The heading name is
+        // one no page here could plausibly acquire, so a later edit cannot turn this red for the
+        // wrong reason.
+        PageLinks.AnchoredTarget anchored = Assert.Single(
+            PageLinks.RepositoryAnchors("README.md", "the [window](TRIAGE.md#no-such-heading).", RepositoryUrl));
+
+        Assert.DoesNotContain(
+            anchored.Fragment,
+            Headings(File.ReadAllText(Path.Combine(RepositoryRoot, anchored.Path))),
+            StringComparer.Ordinal);
+    }
+
     private static IEnumerable<string> PublishedPages() =>
         Directory.EnumerateFiles(RepositoryRoot, "*.md", SearchOption.AllDirectories)
             .Where(IsPublished)

@@ -71,6 +71,62 @@ internal static partial class PageLinks
     }
 
     /// <summary>
+    /// A link that names a place inside a page: the repository-relative path of the page, and the
+    /// anchor within it.
+    /// </summary>
+    internal readonly record struct AnchoredTarget(string Path, string Fragment);
+
+    /// <summary>
+    /// Returns the path-and-anchor of every link in <paramref name="text"/> that names a place
+    /// inside a page of this repository. Links carrying no anchor, and anchors on someone else's
+    /// site, are left out.
+    /// </summary>
+    /// <remarks>
+    /// The companion to <see cref="RepositoryTargets"/>, which drops the anchor because the file is
+    /// all it needs. An anchor fails differently from a path, and quietly enough to be worth reading
+    /// separately: a heading rename leaves the link resolving to a page that still exists, so
+    /// nothing 404s and the reader is simply dropped at the top of it having clicked something
+    /// specific. GitHub does not report a fragment it cannot find.
+    /// </remarks>
+    /// <param name="documentPath">
+    /// Repository-relative path of the page carrying the links — what a relative link, and an
+    /// anchor with no path in front of it, resolve against.
+    /// </param>
+    /// <param name="text">The page's Markdown source.</param>
+    /// <param name="repositoryUrl">This repository's URL, as declared in <c>Directory.Build.props</c>.</param>
+    internal static IReadOnlyList<AnchoredTarget> RepositoryAnchors(
+        string documentPath,
+        string text,
+        string repositoryUrl)
+    {
+        string page = Normalise(documentPath);
+        var anchors = new List<AnchoredTarget>();
+
+        foreach (Match match in InlineLink().Matches(text))
+        {
+            string target = match.Groups[1].Value;
+            int fragment = target.IndexOf('#');
+
+            if (fragment < 0 || fragment == target.Length - 1)
+            {
+                // No anchor, or a bare '#' naming nothing. Neither points at a heading.
+                continue;
+            }
+
+            // A fragment with no path in front of it names a heading on this page, which
+            // RepositoryTargets has no reason to report and this does.
+            string? path = fragment == 0 ? page : RepositoryPath(target, page, repositoryUrl);
+
+            if (path is { Length: > 0 })
+            {
+                anchors.Add(new AnchoredTarget(path, target[(fragment + 1)..]));
+            }
+        }
+
+        return anchors;
+    }
+
+    /// <summary>
     /// Resolves one link target to a repository-relative path, or null when it does not name a file
     /// in this repository.
     /// </summary>
