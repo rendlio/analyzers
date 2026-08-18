@@ -3,8 +3,9 @@ using System.Xml.Linq;
 namespace Rendlio.Analyzers.Tests;
 
 /// <summary>
-/// Reads the restore configuration the local consume check copies, and reports the ways it would
-/// let something other than the package just packed answer the check.
+/// Reads the two files the local consume check copies — a restore configuration and the properties
+/// beside it — and reports the ways either would let something other than the package just packed
+/// answer the check.
 /// </summary>
 /// <remarks>
 /// Installing the package into a throwaway consumer is the only check that exercises
@@ -24,7 +25,15 @@ namespace Rendlio.Analyzers.Tests;
 /// folder of the check's own, the machine's fallback folders cleared, the package's id pinned at
 /// the scratch feed. Remove any of them and everything observable about the check is unchanged,
 /// which is the shape of an edit nobody questions. <see cref="LocalConsumeIsolationTests"/> runs
-/// this over the committed file and over fixtures that break each rule on purpose.
+/// this over the committed files and over fixtures that break each rule on purpose.
+/// </para>
+/// <para>
+/// It takes two files because the settings are not the last word. NuGet reads
+/// <c>NUGET_PACKAGES</c> ahead of the configuration and takes it without warning, so a correct
+/// configuration isolates nothing on a machine that exports one — and exporting one is the ordinary
+/// way a build cache is pointed somewhere. The MSBuild properties beside it are read ahead of both
+/// the settings and the environment, so that is where the isolation is stated; the configuration
+/// still carries it too, for the tools that read settings and for a reader of one file.
 /// </para>
 /// </remarks>
 internal static class LocalConsumeIsolation
@@ -32,8 +41,29 @@ internal static class LocalConsumeIsolation
     /// <summary>The committed configuration, relative to the repository root.</summary>
     internal const string ConfigPath = "eng/local-consume/nuget.config";
 
+    /// <summary>Its other half, which states the same thing where the environment cannot outrank it.</summary>
+    internal const string PropsPath = "eng/local-consume/Directory.Build.props";
+
     /// <summary>The name NuGet discovers a configuration file by, walking up from a project.</summary>
     internal const string ConfigFileName = "nuget.config";
+
+    /// <summary>The name MSBuild discovers a properties file by, walking up from a project.</summary>
+    internal const string PropsFileName = "Directory.Build.props";
+
+    /// <summary>The property naming the folder restore extracts into, ahead of every setting.</summary>
+    internal const string PackagesPathProperty = "RestorePackagesPath";
+
+    /// <summary>The property clearing the folders restore may answer out of without downloading.</summary>
+    internal const string FallbackFoldersProperty = "RestoreFallbackFolders";
+
+    /// <summary>The value that empties a NuGet list property rather than adding to it.</summary>
+    private const string ClearValue = "clear";
+
+    /// <summary>
+    /// The only prefix that resolves against the copied file rather than against the consumer that
+    /// imports it — an MSBuild property is evaluated in the importing project's directory.
+    /// </summary>
+    private const string ThisFileDirectory = "$(MSBuildThisFileDirectory)";
 
     /// <summary>The source key the scratch feed is declared under.</summary>
     internal const string FeedKey = "local";
@@ -86,10 +116,10 @@ internal static class LocalConsumeIsolation
             return;
         }
 
-        if (Path.IsPathRooted(value))
+        if (!IsRelativeLocalPath(value))
         {
             violations.Add(
-                $"{configPath}: points {PackagesFolderKey} at the absolute path '{value}'. This file is copied into a scratch directory and read from there, and a relative value is resolved against wherever it was copied to — which is what lets one committed file be correct on every machine. An absolute one names a folder on whoever wrote it, and the check quietly shares whatever is already in it.");
+                $"{configPath}: points {PackagesFolderKey} at '{value}', which is not resolved against this file. It is copied into a scratch directory and read from there, and a relative value follows it — which is what lets one committed file be correct on every machine. An absolute one names a folder on whoever wrote it, and the check quietly shares whatever is already in it.");
         }
     }
 
@@ -134,11 +164,27 @@ internal static class LocalConsumeIsolation
                 $"{configPath}: <packageSources> does not open with <clear />, so the check runs against the machine's feeds as well as its own rather than against a set it states.");
         }
 
-        if (!sources.Elements("add").Any(add => string.Equals(
-                add.Attribute("key")?.Value, FeedKey, StringComparison.OrdinalIgnoreCase)))
+        XElement? feed = sources.Elements("add").FirstOrDefault(add => string.Equals(
+            add.Attribute("key")?.Value, FeedKey, StringComparison.OrdinalIgnoreCase));
+
+        if (feed is null)
         {
             violations.Add(
                 $"{configPath}: declares no source keyed '{FeedKey}'. That is the scratch feed the pack is written to and the name the mapping refers to; without it the mapping routes {PackageId} at a source nothing declares, and restore fails NU1101 for a package sitting right there.");
+
+            return;
+        }
+
+        // The same argument the packages folder is held to, and for the same reason: this file is
+        // read from wherever it was copied, so a value that does not follow it points somewhere
+        // else on every machine but the one it was written on. A feed elsewhere is the louder half
+        // of that — the check would grade whatever it answers with rather than the pack in hand.
+        string feedValue = feed.Attribute("value")?.Value ?? string.Empty;
+
+        if (!IsRelativeLocalPath(feedValue))
+        {
+            violations.Add(
+                $"{configPath}: points the '{FeedKey}' source at '{feedValue}', which is not resolved against this file. The whole check rests on that source being the directory the pack was just written to; anywhere else and it grades a package this run did not build.");
         }
     }
 
@@ -210,6 +256,115 @@ internal static class LocalConsumeIsolation
                 $"{configPath}: resolves {PackageId} at the source '{key}' rather than at '{FeedKey}', because that is where its longest matching pattern points. Left to a wider rule the check grades whatever that source answers with — which is the scratch feed today only because nothing of this name is published yet, and the released package the day one is.");
         }
     }
+
+    /// <summary>
+    /// Returns one message per way <paramref name="propsText"/> fails to state the packages folder
+    /// where the environment cannot outrank it, or an empty list when it does.
+    /// <paramref name="propsPath"/> only names the file in a message; nothing is read from disk.
+    /// </summary>
+    /// <remarks>
+    /// The settings in the configuration beside this file are not the last word on where restore
+    /// extracts to. NuGet reads <c>NUGET_PACKAGES</c> ahead of <c>globalPackagesFolder</c> and takes
+    /// it without a word, and <c>NUGET_FALLBACK_PACKAGES</c> survives that file clearing
+    /// <c>fallbackPackageFolders</c> outright — so on a machine exporting either, a correct
+    /// configuration produces an uninsulated run that reports success. MSBuild properties are read
+    /// ahead of both, which makes this the only layer where the isolation can be stated rather than
+    /// hoped for.
+    /// </remarks>
+    internal static IReadOnlyList<string> InspectProps(string propsPath, string propsText)
+    {
+        var violations = new List<string>();
+
+        // Matched on local names so the reader works whether or not the file carries the old
+        // MSBuild XML namespace. This one does not, because SDK-style projects dropped it; a
+        // namespace is still the kind of thing a tool puts back, and a reader that silently found
+        // nothing afterwards would report the file compliant for having become unreadable.
+        List<XElement> properties =
+            [.. XDocument.Parse(propsText)
+                .Descendants()
+                .Where(element => element.Parent?.Name.LocalName == "PropertyGroup")];
+
+        InspectProperty(
+            propsPath,
+            properties,
+            PackagesPathProperty,
+            $"sets no <{PackagesPathProperty}>, so where restore extracts to is left to the settings — which NUGET_PACKAGES overrides silently, putting the run back in the machine-wide folder this whole check exists to stay out of. Set it to {ThisFileDirectory}packages.",
+            value => value.StartsWith(ThisFileDirectory, StringComparison.Ordinal)
+                ? null
+                : $"points <{PackagesPathProperty}> at '{value}'. A property here is evaluated in the consumer that imports it, not in this directory, so anything not opening with {ThisFileDirectory} resolves somewhere other than beside the feed the pack was written to.",
+            violations);
+
+        InspectProperty(
+            propsPath,
+            properties,
+            FallbackFoldersProperty,
+            $"sets no <{FallbackFoldersProperty}>, so a folder named by NUGET_FALLBACK_PACKAGES is still searched — and that variable survives the configuration clearing fallbackPackageFolders, which makes this the only place it is answered. Set it to '{ClearValue}'.",
+            value => string.Equals(value, ClearValue, StringComparison.OrdinalIgnoreCase)
+                ? null
+                : $"sets <{FallbackFoldersProperty}> to '{value}' rather than '{ClearValue}'. Anything else adds a folder to search instead of emptying the list, which is one more place an id and version can be answered from without downloading.",
+            violations);
+
+        return violations;
+    }
+
+    /// <summary>
+    /// Reports <paramref name="name"/> missing, conditioned, or failing
+    /// <paramref name="validate"/> — which returns a message for a bad value and <c>null</c> for a
+    /// good one.
+    /// </summary>
+    private static void InspectProperty(
+        string propsPath,
+        List<XElement> properties,
+        string name,
+        string absent,
+        Func<string, string?> validate,
+        List<string> violations)
+    {
+        XElement? property = properties.FirstOrDefault(element => element.Name.LocalName == name);
+
+        if (property is null)
+        {
+            violations.Add($"{propsPath}: {absent}");
+
+            return;
+        }
+
+        // The nearest condition on the way out, rather than the one written on the property itself.
+        // A <PropertyGroup> is where MSBuild convention puts a condition, and a <Choose>/<When>
+        // around it is a third spelling of the same thing; each stops the property being set
+        // exactly as an inline condition would. Nothing here has a reason to be conditional, and a
+        // condition is precisely how a line whose effect is invisible on a passing run stops firing.
+        XAttribute? condition = property.AncestorsAndSelf()
+            .Select(element => element.Attribute("Condition"))
+            .FirstOrDefault(attribute => attribute is not null);
+
+        if (condition is not null)
+        {
+            violations.Add(
+                $"{propsPath}: conditions <{name}> on \"{condition.Value}\", written on <{condition.Parent?.Name.LocalName}>. State it unconditionally — this file is copied into a directory made for one run, so there is no case it should not apply to, and a condition is how it comes to apply to none.");
+        }
+
+        string? failure = validate(property.Value.Trim());
+
+        if (failure is not null)
+        {
+            violations.Add($"{propsPath}: {failure}");
+        }
+    }
+
+    /// <summary>
+    /// True when <paramref name="value"/> is a local path resolved against the file that declares
+    /// it, rather than one naming a fixed place on the machine or a feed off it.
+    /// </summary>
+    /// <remarks>
+    /// Both halves are needed. <see cref="Path.IsPathRooted(string)"/> catches an absolute path on
+    /// either platform but not a URL, whose scheme makes it neither rooted nor relative; parsing it
+    /// as an absolute <see cref="Uri"/> catches the URL, and on Windows an absolute path as well.
+    /// </remarks>
+    private static bool IsRelativeLocalPath(string value) =>
+        !string.IsNullOrWhiteSpace(value)
+        && !Path.IsPathRooted(value)
+        && !Uri.TryCreate(value, UriKind.Absolute, out _);
 
     /// <summary>
     /// How much of <paramref name="packageId"/> the mapping pattern <paramref name="pattern"/>

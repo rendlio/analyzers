@@ -24,6 +24,79 @@ internal static class RepositoryLayout
     /// </remarks>
     internal static string Root { get; } = FindRoot();
 
+    /// <summary>Directory segments that hold build output rather than source.</summary>
+    private static readonly string[] _buildOutput = ["bin", "obj", "artifacts"];
+
+    /// <summary>Every project in this repository, build output aside, in a stable order.</summary>
+    /// <remarks>
+    /// Walked rather than read out of the solution file: a project that builds is not the only
+    /// project that restores, and one added to the tree but not yet to the solution still imports
+    /// everything above it.
+    /// </remarks>
+    internal static List<string> Projects() =>
+        [.. Directory.EnumerateFiles(Root, "*.csproj", SearchOption.AllDirectories)
+            .Where(path => !IsBuildOutput(path))
+            .OrderBy(path => path, StringComparer.Ordinal)];
+
+    /// <summary>
+    /// Every file called <paramref name="fileName"/> that a build here would find by walking up
+    /// from a project, named relative to the root, in a stable order and without duplicates.
+    /// </summary>
+    /// <remarks>
+    /// MSBuild and NuGet both discover their per-directory files this way — <c>Directory.Build.props</c>
+    /// and <c>nuget.config</c> alike — by walking from the project being built towards the root. So
+    /// the question worth asking about a copy of either is not whether one exists in the repository
+    /// but whether anything imports it: one on that path changes every build here, and one off it is
+    /// inert to the build and live only where it is deliberately copied.
+    /// <para>
+    /// The walk stops at the repository root. Above it is the developer's own machine, which this
+    /// repository does not get to have opinions about — clearing what it contributes is the job of
+    /// the files themselves. Names are matched without regard to case, because that is how both
+    /// tools discover them, so a copy differing only in casing is one a build reads and this walk
+    /// has to see.
+    /// </para>
+    /// </remarks>
+    internal static List<string> FilesOnProjectWalkUpPaths(string fileName)
+    {
+        var found = new SortedSet<string>(StringComparer.Ordinal);
+
+        foreach (string project in Projects())
+        {
+            for (DirectoryInfo? directory = new(Path.GetDirectoryName(project) ?? Root);
+                 directory is not null;
+                 directory = directory.Parent)
+            {
+                foreach (string file in Directory.EnumerateFiles(directory.FullName)
+                             .Where(path => string.Equals(
+                                 Path.GetFileName(path), fileName, StringComparison.OrdinalIgnoreCase)))
+                {
+                    found.Add(Path.GetRelativePath(Root, file).Replace('\\', '/'));
+                }
+
+                if (string.Equals(
+                        Path.TrimEndingDirectorySeparator(directory.FullName),
+                        Path.TrimEndingDirectorySeparator(Root),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    break;
+                }
+            }
+        }
+
+        return [.. found];
+    }
+
+    /// <summary>True when <paramref name="path"/> sits under a build-output directory.</summary>
+    /// <remarks>
+    /// Tested against the path relative to the root, not the absolute one: a checkout living under
+    /// a directory of one of those names — <c>C:\bin\analyzers</c> — would otherwise classify every
+    /// file in the repository as output and leave the walks above with nothing to inspect.
+    /// </remarks>
+    private static bool IsBuildOutput(string path) =>
+        Path.GetRelativePath(Root, path)
+            .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .Any(segment => _buildOutput.Contains(segment, StringComparer.OrdinalIgnoreCase));
+
     private static string FindRoot()
     {
         for (DirectoryInfo? directory = new(AppContext.BaseDirectory);

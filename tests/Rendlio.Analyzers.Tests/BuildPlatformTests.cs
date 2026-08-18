@@ -58,7 +58,17 @@ public sealed class BuildPlatformTests
         // goes on reading the root's copy and reporting the repository clean. A nearer file is not
         // forbidden; it just has to carry the pin itself or import the one above it with
         // GetPathOfFileAbove, and going red here is how that stays a decision somebody makes.
-        Assert.Equal(PropsPath, Assert.Single(PropsFilesInRepository()));
+        //
+        // Read along the walk rather than across the whole tree, which is that decision, made once:
+        // the local consume check ships a Directory.Build.props of its own under eng/, to be copied
+        // into a scratch directory where it isolates a throwaway consumer's restore. Nothing in this
+        // repository imports it — eng/ is on no project's path to the root — so it detaches nothing
+        // here, and a sweep by name alone would have to forbid a file that cannot affect this build.
+        // Moving it somewhere a project does reach still goes red, both here and in
+        // LocalConsumeIsolationTests, which holds the same walk for both files that check copies.
+        Assert.Equal(
+            [Path.GetRelativePath(RepositoryLayout.Root, PropsPath).Replace('\\', '/')],
+            RepositoryLayout.FilesOnProjectWalkUpPaths(PropsFile));
     }
 
     [Fact]
@@ -246,20 +256,6 @@ public sealed class BuildPlatformTests
     /// </remarks>
     private static List<string> ProjectFilesInRepository() =>
         [.. Directory.EnumerateFiles(RepositoryLayout.Root, "*.csproj", SearchOption.AllDirectories)
-            .Where(path => !IsBuildOutput(path))
-            .OrderBy(path => path, StringComparer.Ordinal)];
-
-    /// <summary>
-    /// Every file of that name in the repository, build output aside — which should be the root's
-    /// and nothing else, because a nearer one is what a project would import instead.
-    /// </summary>
-    /// <remarks>
-    /// <c>bin</c> and <c>obj</c> are skipped because a copy under either is output rather than
-    /// input: nothing walks up out of a build directory to find it, so reporting one would fail
-    /// the build over an artifact of having built.
-    /// </remarks>
-    private static List<string> PropsFilesInRepository() =>
-        [.. Directory.EnumerateFiles(RepositoryLayout.Root, PropsFile, SearchOption.AllDirectories)
             .Where(path => !IsBuildOutput(path))
             .OrderBy(path => path, StringComparer.Ordinal)];
 

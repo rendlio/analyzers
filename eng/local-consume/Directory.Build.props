@@ -1,0 +1,32 @@
+<Project>
+
+  <!--
+    Copied into the same scratch directory as the nuget.config beside it, and for the same
+    reason: to make the throwaway consumer restore the package this repository just packed
+    rather than a copy of some earlier build.
+
+    That file sets globalPackagesFolder, which is the setting for this. This one exists
+    because the setting is not the last word. NuGet reads the NUGET_PACKAGES environment
+    variable ahead of it and does not warn when it takes it, so on a machine that exports one
+    the isolation simply does not happen: restore succeeds, reports the machine folder, and
+    the check grades whatever was extracted there first. NUGET_FALLBACK_PACKAGES is the same
+    story one step along, and it survives the config clearing fallbackPackageFolders outright.
+    Neither is exotic; pointing NUGET_PACKAGES at a cache directory is the ordinary way a CI
+    job avoids re-downloading.
+
+    RestorePackagesPath and RestoreFallbackFolders are MSBuild properties, which NuGet reads
+    ahead of both the settings and the environment. So they are the layer where this can be
+    stated rather than hoped for, and they are why the run does not have to ask what the shell
+    it started in happens to export.
+
+    Both values point at this file's own directory, so the folder lands beside it wherever the
+    directory was copied to and there is nothing here to edit. Unconditional on purpose: a
+    condition is how a line like this stops firing in the one case it exists for.
+  -->
+
+  <PropertyGroup>
+    <RestorePackagesPath>$(MSBuildThisFileDirectory)packages</RestorePackagesPath>
+    <RestoreFallbackFolders>clear</RestoreFallbackFolders>
+  </PropertyGroup>
+
+</Project>
