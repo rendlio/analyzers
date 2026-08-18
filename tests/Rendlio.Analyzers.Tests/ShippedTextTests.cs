@@ -1330,6 +1330,78 @@ public sealed partial class ShippedTextTests
         Assert.DoesNotMatch(UnreleasedClaim(), ShippedText.Unwrap(page));
     }
 
+    [Theory]
+    // Sentence-initial, one row per branch. This is how a page would most naturally write the
+    // claim — a sentence starts with a capital — and it is the shape every row of the positive
+    // theory above happens to miss.
+    [InlineData("No released version exists yet.")]
+    [InlineData("Not yet published.")]
+    [InlineData("Never released.")]
+    [InlineData("Unreleased, so a fix cannot reach you.")]
+    // A heading, which is where a page would put the claim if it were making it prominently.
+    [InlineData("## No Published Versions")]
+    public void Guard_catches_the_claim_however_a_page_capitalises_it(string page)
+    {
+        // RegexOptions.IgnoreCase is load-bearing, and until this case nothing held it down: every
+        // row of the theory above matches a substring that is lowercase from end to end, so the
+        // flag could be dropped in a later edit with this whole file still green while "No released
+        // version exists yet." walked straight past the walk. That is the silent-green direction
+        // the pattern's own remarks call the bad one — the page goes on saying it, and the guard
+        // goes on reporting clean. Each row here fails without the flag; the negatives above are
+        // unaffected by it, so this widens what is caught and nothing else.
+        Assert.Matches(UnreleasedClaim(), ShippedText.Unwrap(page));
+    }
+
+    [Theory]
+    [InlineData("de-DE")]
+    [InlineData("tr-TR")]
+    public void The_gate_reaches_the_same_verdict_whatever_the_contributor_locale(string culture)
+    {
+        // What this holds, stated exactly, because the obvious reading of it is wrong: it does NOT
+        // pin the CultureInvariant flag above. That flag cannot be pinned by a case like this one,
+        // and the reason is worth writing down — [GeneratedRegex] resolves case equivalence when
+        // the source generator runs, so the matcher is fixed at COMPILE time and the ambient
+        // culture at match time cannot reach it. Removing CultureInvariant and running this under
+        // tr-TR was tried; it stays green, in isolation as well as in the full run.
+        //
+        // What it does hold is the property a contributor actually depends on — that the gate's
+        // verdict does not turn on their locale — and it starts biting the moment that stops being
+        // free. Swap the generated regex for a `new Regex(pattern, RegexOptions.IgnoreCase)` built
+        // where it is used, which is an ordinary-looking refactor, and casing is resolved at
+        // construction under whatever culture is current: 'I' lower-cases to 'ı' under tr-TR and
+        // stops being the 'i' of "published", so the claim goes uncaught on the machine of the
+        // person writing the page while CI, which runs neither culture, still calls it clean.
+        // Both directions are asserted, because a rule gone culture-sensitive can fail either way.
+        CultureInfo previousCulture = CultureInfo.CurrentCulture;
+        CultureInfo previousUiCulture = CultureInfo.CurrentUICulture;
+
+        try
+        {
+            var target = new CultureInfo(culture);
+            CultureInfo.CurrentCulture = target;
+            CultureInfo.CurrentUICulture = target;
+
+            ShouldBeUnderARealCulture(culture);
+
+            // Upper case rather than a prettier shape, because it is the only one carrying the
+            // letter the Turkish mapping moves: a title-cased "No Published Versions" differs from
+            // the pattern in 'N', 'P' and 'V' alone, and no culture maps any of those differently.
+            Assert.Matches(UnreleasedClaim(), ShippedText.Unwrap("NO PUBLISHED VERSIONS"));
+            Assert.Matches(UnreleasedClaim(), ShippedText.Unwrap("NOT YET PUBLISHED"));
+
+            // Quoted from SECURITY.md rather than invented, so the false-positive direction is
+            // pinned against the shipped sentence that sits closest to the pattern.
+            Assert.DoesNotMatch(
+                UnreleasedClaim(),
+                ShippedText.Unwrap("A published version can be unlisted but never replaced."));
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = previousCulture;
+            CultureInfo.CurrentUICulture = previousUiCulture;
+        }
+    }
+
     // ------------------------------------- the compiler-host floor, and the pin it is read from
 
     /// <summary>The Roslyn version this package compiles against, read back from the one file that
