@@ -6,18 +6,23 @@ using Microsoft.CodeAnalysis.Diagnostics;
 namespace Rendlio.Analyzers.Tests;
 
 /// <summary>
-/// The ways out, exactly as the rule pages under <c>docs/rules</c> write them down: a severity in
-/// <c>.editorconfig</c>, a category switch in the same file, and a <c>#pragma</c> around one call
-/// site.
+/// The ways out, as the rule pages under <c>docs/rules</c> write them down: a <c>#pragma</c> around
+/// one call site, a severity in <c>.editorconfig</c>, a <c>NoWarn</c> in the project file, and a
+/// category switch back in the <c>.editorconfig</c>.
 /// </summary>
 /// <remarks>
 /// <para>These rules report at severity error by default, which makes the escape hatch part of the
 /// contract rather than a footnote. A consumer who hits a false positive on a Friday needs the
 /// documented suppression to work on the first try, and the cost of it not working is not a wrong
 /// diagnostic — it is a build they cannot get green and a package they remove.</para>
-/// <para>So each case runs the snippet the page publishes, through the same
-/// <see cref="AnalyzerConfig"/> machinery a real build uses. A page that drifts from what the
-/// compiler does fails here rather than in a stranger build log.</para>
+/// <para>So each case drives the mechanism a page publishes, in the spelling that page publishes it
+/// in, through the same <see cref="AnalyzerConfig"/> and
+/// <see cref="CompilationOptions.SpecificDiagnosticOptions"/> machinery a real build uses. A
+/// documented route that stops working fails here rather than in a stranger's build log.</para>
+/// <para>What these cases do not do is read the pages. The config lines are rebuilt from a format
+/// string over the rule id, so what is pinned here is that each mechanism behaves as documented; that
+/// the pages spell the ids and categories correctly is pinned separately, by
+/// <c>Every_suppression_a_published_page_shows_names_something_this_pack_ships</c>.</para>
 /// <para>The other half is what suppression must NOT do. A category switch names a category, so it
 /// has to leave the other category alone — the two are separate on purpose, because wanting
 /// reproducible output is not the same want as wanting a sealed box — and a pragma names a span, so
@@ -250,6 +255,48 @@ public sealed class SuppressionTests
         diagnostics.ShouldHaveSingleItem().Severity.ShouldBe(DiagnosticSeverity.Error);
     }
 
+    // ---- NoWarn, per rule ----
+
+    [Theory]
+    [MemberData(nameof(EveryRule))]
+    public async Task NoWarn_silences_the_rule(string rule)
+    {
+        // The project-file spelling, and the least obvious of the four: NoWarn reads as a switch
+        // about *warnings*, and these rules report at error. It is named in the triage policy as
+        // part of the contract, so what it does to an error-severity rule is pinned here rather
+        // than left for a consumer to discover in a build they cannot get green.
+        ImmutableArray<Diagnostic> diagnostics = await RunNoWarnAsync(rule, rule, ViolationOf(rule));
+
+        diagnostics.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [MemberData(nameof(EveryRule))]
+    public async Task NoWarn_for_another_rule_leaves_this_one_alone(string rule)
+    {
+        // Same family-scoping promise as the severity and pragma cases, through the mechanism that
+        // is furthest from the code it acts on: a NoWarn is invisible at the call site, so a rule
+        // answering to an id that is not its own would be near-impossible to spot from the source.
+        ImmutableArray<Diagnostic> diagnostics = await RunNoWarnAsync(rule, "RENDLIO999", ViolationOf(rule));
+
+        diagnostics.ShouldHaveSingleItem().Severity.ShouldBe(DiagnosticSeverity.Error);
+    }
+
+    [Theory]
+    [MemberData(nameof(EveryRule))]
+    public async Task NoWarn_takes_the_whole_list_it_is_given(string rule)
+    {
+        // NoWarn is a list, and the spelling the pages publish appends to the inherited value — so
+        // the id that matters arrives beside ids belonging to other packs, and typically not first.
+        // A mechanism that only honoured the head of the list would pass every case above.
+        ImmutableArray<Diagnostic> diagnostics = await RunNoWarnAsync(
+            rule,
+            $"CS1591;RENDLIO999;{rule}",
+            ViolationOf(rule));
+
+        diagnostics.ShouldBeEmpty();
+    }
+
     private static Task<ImmutableArray<Diagnostic>> RunAsync(string rule, string source) =>
         AnalyzerHarness.RunAsync(AnalyzerFor(rule), "Consumer", source);
 
@@ -258,6 +305,12 @@ public sealed class SuppressionTests
         string editorConfig,
         string source) =>
         AnalyzerHarness.RunConfiguredAsync(AnalyzerFor(rule), editorConfig, source);
+
+    private static Task<ImmutableArray<Diagnostic>> RunNoWarnAsync(
+        string rule,
+        string noWarn,
+        string source) =>
+        AnalyzerHarness.RunNoWarnAsync(AnalyzerFor(rule), noWarn, source);
 
     private static DiagnosticAnalyzer AnalyzerFor(string rule) => rule switch
     {

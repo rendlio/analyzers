@@ -47,7 +47,7 @@ internal static class AnalyzerHarness
         DiagnosticAnalyzer analyzer,
         string assemblyName,
         params string[] sources) =>
-        RunAsync(analyzer, assemblyName, editorConfig: null, sources);
+        RunAsync(analyzer, assemblyName, editorConfig: null, noWarn: null, sources);
 
     /// <summary>
     /// As <see cref="RunAsync(DiagnosticAnalyzer, string, string[])"/>, with
@@ -70,12 +70,39 @@ internal static class AnalyzerHarness
         string editorConfig,
         string source,
         string assemblyName = "Consumer") =>
-        RunAsync(analyzer, assemblyName, editorConfig, source);
+        RunAsync(analyzer, assemblyName, editorConfig, noWarn: null, source);
+
+    /// <summary>
+    /// As <see cref="RunAsync(DiagnosticAnalyzer, string, string[])"/>, with the ids
+    /// <paramref name="noWarn"/> names suppressed the way a <c>&lt;NoWarn&gt;</c> in a project file
+    /// suppresses them.
+    /// </summary>
+    /// <remarks>
+    /// A different layer from the <c>.editorconfig</c> severities: MSBuild expands the property and
+    /// hands the list to the compiler as <c>/nowarn:</c>, which turns each id into
+    /// <see cref="ReportDiagnostic.Suppress"/> in
+    /// <see cref="CompilationOptions.SpecificDiagnosticOptions"/>. That last step is the one that
+    /// decides whether a rule goes quiet, so it is the one reproduced here.
+    /// </remarks>
+    /// <param name="analyzer">The rule under test.</param>
+    /// <param name="noWarn">
+    /// The <c>NoWarn</c> value after MSBuild has expanded it, so ids only — split here on the
+    /// separators the compiler's own command-line parser accepts.
+    /// </param>
+    /// <param name="source">The file to analyse.</param>
+    /// <param name="assemblyName">The compilation's assembly name.</param>
+    internal static Task<ImmutableArray<Diagnostic>> RunNoWarnAsync(
+        DiagnosticAnalyzer analyzer,
+        string noWarn,
+        string source,
+        string assemblyName = "Consumer") =>
+        RunAsync(analyzer, assemblyName, editorConfig: null, noWarn, source);
 
     private static async Task<ImmutableArray<Diagnostic>> RunAsync(
         DiagnosticAnalyzer analyzer,
         string assemblyName,
         string? editorConfig,
+        string? noWarn,
         params string[] sources)
     {
         // Nothing to analyse is not "the rule found nothing" either.
@@ -95,6 +122,11 @@ internal static class AnalyzerHarness
         var compilationOptions = new CSharpCompilationOptions(
             OutputKind.DynamicallyLinkedLibrary,
             nullableContextOptions: NullableContextOptions.Enable);
+
+        if (noWarn is not null)
+        {
+            compilationOptions = compilationOptions.WithSpecificDiagnosticOptions(Suppressed(noWarn));
+        }
 
         AnalyzerOptions analyzerOptions = Configure(editorConfig, trees, ref compilationOptions);
 
@@ -154,6 +186,17 @@ internal static class AnalyzerHarness
         compilationOptions = compilationOptions.WithSyntaxTreeOptionsProvider(new Severities(severities));
         return new AnalyzerOptions([], new Keys(keys));
     }
+
+    /// <summary>
+    /// Every id a <c>NoWarn</c> value names, mapped to suppressed. Separated on <c>;</c>, <c>,</c> or
+    /// whitespace, all three of which the compiler accepts, and de-duplicated because the idiomatic
+    /// spelling appends to the inherited value and may well name an id twice.
+    /// </summary>
+    private static ImmutableDictionary<string, ReportDiagnostic> Suppressed(string noWarn) =>
+        noWarn
+            .Split([';', ',', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.Ordinal)
+            .ToImmutableDictionary(id => id, _ => ReportDiagnostic.Suppress, StringComparer.Ordinal);
 
     private static void Fail(string what, IEnumerable<Diagnostic> diagnostics)
     {

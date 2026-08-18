@@ -49,7 +49,7 @@ that: turning off either one leaves the other reporting at error.
 
 ## Turning a rule off
 
-Three mechanisms, narrowest first. Each rule page repeats these spelled out with its own id.
+Four mechanisms, narrowest first. Each rule page repeats these spelled out with its own id.
 
 **One call site**, with a comment saying why. This is the one to reach for first, because it is the
 only suppression that leaves its reason next to the code it applies to:
@@ -69,6 +69,21 @@ first:
 dotnet_diagnostic.RENDLIO001.severity = none
 dotnet_diagnostic.RENDLIO002.severity = warning
 ```
+
+**One rule, for a whole project**, in the `.csproj`. This is the project-file spelling of the `none`
+above it: the same effect, reached from a different file, and covering every file the project
+compiles rather than whatever an `.editorconfig` section matches:
+
+```xml
+<PropertyGroup>
+  <NoWarn>$(NoWarn);RENDLIO001</NoWarn>
+</PropertyGroup>
+```
+
+The name undersells it — `NoWarn` silences these rules even though they report at error, and the
+test suite pins that rather than leaving it to be found out in a build that will not go green.
+Append to `$(NoWarn)` rather than assigning over it, or the project quietly stops suppressing
+whatever it was suppressing before.
 
 **A whole category**, in the same file. Keyed on the category rather than on an id, so it also
 covers any later rule published into that category:
@@ -93,6 +108,12 @@ A `#pragma` around one call site costs almost nothing: it is visible in review, 
 and the comment beside it says why. A rule set to `none` for a folder costs the property for that
 folder — which is a real answer when the folder genuinely does not need it, and an invisible one
 when it does, because nothing in the build will mention it again.
+
+`NoWarn` costs the property for the whole project, and adds distance on top: it lives in the
+`.csproj`, usually as one id among several on a line nobody rereads, so nothing anywhere near the
+code hints that a ban was ever in force over it. Prefer the `.editorconfig` severity when you have
+the choice — it takes a `warning` as well as a `none`, and it can be narrowed to the folder that
+actually needs the exception.
 
 The honest reading of a broad suppression is that the project does not want the ban. Dropping the
 package reference for that project says so more clearly, in a place someone will find, than a

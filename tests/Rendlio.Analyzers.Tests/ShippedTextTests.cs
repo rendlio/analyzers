@@ -307,6 +307,21 @@ public sealed partial class ShippedTextTests
     [GeneratedRegex(@"#pragma warning (?:disable|restore) (\S+)", RegexOptions.CultureInvariant)]
     private static partial Regex PragmaRule();
 
+    /// <summary>A project-file <c>NoWarn</c>, capturing the whole list it sets.</summary>
+    [GeneratedRegex(@"<NoWarn>([^<]*)</NoWarn>", RegexOptions.CultureInvariant)]
+    private static partial Regex NoWarnList();
+
+    /// <summary>
+    /// The names one capture holds. <c>NoWarn</c> is a list, and the spelling these pages publish
+    /// leads with the MSBuild token carrying the inherited value, which is not an id and is dropped.
+    /// Splitting also means a multi-id pragma reads as its ids rather than as the first one with a
+    /// separator stuck to it.
+    /// </summary>
+    private static IEnumerable<string> Names(string captured) =>
+        captured
+            .Split([';', ',', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(static name => !name.StartsWith("$(", StringComparison.Ordinal));
+
     [Fact]
     public void Every_suppression_a_published_page_shows_names_something_this_pack_ships()
     {
@@ -315,6 +330,12 @@ public sealed partial class ShippedTextTests
         // ignores configuration, and the reader concludes the pack cannot be turned off. Nothing
         // else catches it: a misspelled id is a perfectly valid .editorconfig line that silences
         // nothing, and no build anywhere warns about it.
+        //
+        // The reach is deliberately total: EVERY id and category named in a suppression anywhere on
+        // a published page has to be one this pack ships. So a page that legitimately documents
+        // someone else's id — one of the CS or NU suppressions this repository's own build props
+        // carry, say — fails here too. That is this test biting, not a defect; the fix is to widen
+        // it knowingly rather than to let an unrecognised id through.
         var shippedRules = new HashSet<string>(StringComparer.Ordinal);
         var shippedCategories = new HashSet<string>(StringComparer.Ordinal);
 
@@ -344,17 +365,20 @@ public sealed partial class ShippedTextTests
                      {
                          (ConfiguredRule(), (ISet<string>)shippedRules, "rule"),
                          (PragmaRule(), shippedRules, "rule"),
+                         (NoWarnList(), shippedRules, "rule"),
                          (ConfiguredCategory(), shippedCategories, "category"),
                      })
             {
                 foreach (Match match in pattern.Matches(text))
                 {
-                    suppressionsChecked++;
-                    string named = match.Groups[1].Value;
-
-                    if (!shipped.Contains(named))
+                    foreach (string named in Names(match.Groups[1].Value))
                     {
-                        unknown.Add($"{relativePage}: shows '{match.Value}', but no shipped {what} is named '{named}'.");
+                        suppressionsChecked++;
+
+                        if (!shipped.Contains(named))
+                        {
+                            unknown.Add($"{relativePage}: shows '{match.Value}', but no shipped {what} is named '{named}'.");
+                        }
                     }
                 }
             }

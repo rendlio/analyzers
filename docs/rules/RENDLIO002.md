@@ -67,6 +67,11 @@ dotnet_diagnostic.RENDLIO002.severity = none
 dotnet_analyzer_diagnostic.category-Rendlio.Determinism.severity = warning
 ```
 
+```xml
+<!-- .csproj — the whole rule, for this project; silences it despite the name -->
+<NoWarn>$(NoWarn);RENDLIO002</NoWarn>
+```
+
 ```csharp
 #pragma warning disable RENDLIO002 // one call site, with a comment saying why
 ```
