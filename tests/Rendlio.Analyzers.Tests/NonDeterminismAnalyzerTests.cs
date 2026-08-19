@@ -349,6 +349,31 @@ public sealed class NonDeterminismAnalyzerTests
     }
 
     [Fact]
+    public async Task Deriving_from_Random_is_an_error_at_the_declaration()
+    {
+        // The cheapest way around a type row: wrap it once, then use the wrapper everywhere. The
+        // base-type reference is the one place the banned name still has to appear, so that is
+        // where the rule catches it — the subclass's own uses are a project type and stay clean,
+        // which is why this case has to be pinned rather than inferred from the cast case above.
+        ImmutableArray<Diagnostic> diagnostics = await RunAsync("""
+            using System;
+
+            namespace Example;
+
+            internal sealed class Dice : Random
+            {
+            }
+
+            internal static class Sut
+            {
+                internal static int Roll(Dice dice) => dice.Next();
+            }
+            """);
+
+        diagnostics.ShouldBeSingleError(Rule, "'System.Random'");
+    }
+
+    [Fact]
     public async Task RandomNumberGenerator_is_a_different_type_and_is_legal()
     {
         // System.Security.Cryptography.RandomNumberGenerator is not System.Random and is not on the

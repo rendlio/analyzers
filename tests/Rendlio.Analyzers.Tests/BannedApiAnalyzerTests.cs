@@ -347,6 +347,30 @@ public sealed class BannedApiAnalyzerTests
         diagnostics.ShouldBeSingleError(Rule, $"'{type}'");
     }
 
+    [Theory]
+    // An enum. It carries a status code that was already in hand and reaches nothing.
+    [InlineData("System.Net.HttpStatusCode")]
+    // A pure string encoder: HtmlEncode/UrlEncode do not open a socket.
+    [InlineData("System.Net.WebUtility")]
+    public async Task A_type_in_the_System_Net_tree_is_banned_even_when_it_reaches_no_network(string type)
+    {
+        // The row bans the tree, not the types in it that happen to do I/O — and that breadth is
+        // the deliberate part. Narrowing it to "types with network methods" is the plausible
+        // tidy-up, and it would reopen the row for anything reached through a helper the narrowing
+        // judged inert. Pinned here so widening or narrowing the row stays a visible test edit,
+        // as the table's own note requires.
+        ImmutableArray<Diagnostic> diagnostics = await RunAsync($$"""
+            namespace Example;
+
+            internal static class Sut
+            {
+                internal static object Run() => typeof({{type}});
+            }
+            """);
+
+        diagnostics.ShouldBeSingleError(Rule, $"'{type}'");
+    }
+
     [Fact]
     public async Task An_unused_System_Net_import_is_not_a_use()
     {
