@@ -2,7 +2,9 @@ namespace Rendlio.Analyzers.Tests;
 
 /// <summary>
 /// Holds every workflow this repository runs to <see cref="WorkflowPins"/>, and holds
-/// <see cref="WorkflowPins"/> itself to fixtures that break each rule on purpose.
+/// <see cref="WorkflowPins"/> itself to fixtures that break each rule on purpose. The rules about
+/// what a step's command may leave to its surroundings live here too, for the same reason: they are
+/// conventions about one line in one file, which is the kind that lasts until the next edit.
 /// </summary>
 public sealed class WorkflowPinsTests
 {
@@ -11,6 +13,9 @@ public sealed class WorkflowPinsTests
     /// the sweep below to be checking the thing this rule is for.
     /// </summary>
     private const string PublishingWorkflow = "release.yml";
+
+    /// <summary>The solution, which decides the platform for the projects in it itself.</summary>
+    private const string SolutionTarget = "Rendlio.Analyzers.slnx";
 
     [Fact]
     public void Every_action_the_workflows_run_is_pinned_to_a_commit()
@@ -43,6 +48,77 @@ public sealed class WorkflowPinsTests
         // Every workflow runs at least one action, so a file the reader finds no references in
         // means the reader stopped reading, not that the file got simpler.
         Assert.All(workflows, path => Assert.NotEmpty(WorkflowPins.Read(File.ReadAllText(path))));
+    }
+
+    [Fact]
+    public void Every_pack_step_says_which_platform_it_packs_for()
+    {
+        List<string> violations = [];
+
+        foreach (string workflow in WorkflowFiles())
+        {
+            violations.AddRange(
+                PackPlatformViolations(
+                    Path.GetRelativePath(RepositoryLayout.Root, workflow).Replace('\\', '/'),
+                    File.ReadAllText(workflow)));
+        }
+
+        Assert.Empty(violations);
+    }
+
+    [Fact]
+    public void The_pack_step_that_publishes_is_one_of_the_steps_that_gets_checked()
+    {
+        // Guards the guard. A rule enforced by searching for a command reports green the moment the
+        // search stops finding it — a renamed step, a rewritten scalar, a pack moved inside a shell
+        // script. release.yml is the workflow that pushes under this package's name, so its pack
+        // step is the one that has to be found for the rule above to be checking anything.
+        Assert.NotEmpty(
+            PackCommands(
+                File.ReadAllText(
+                    Path.Combine(RepositoryLayout.Root, ".github", "workflows", PublishingWorkflow))));
+    }
+
+    [Theory]
+    // The shape this step had before the platform went on it: the project packed directly, with
+    // nothing saying which platform, on a single line.
+    [InlineData(
+        "      - name: Pack\n"
+        + "        run: dotnet pack src/Rendlio.Analyzers/Rendlio.Analyzers.csproj --configuration Release --no-build --output ./artifacts")]
+    // The same omission written as a YAML folded scalar, which is the form these steps use — so a
+    // reader that worked line by line would report this one for the wrong reason and the clean one
+    // below for no reason at all.
+    [InlineData(
+        "      - name: Pack\n"
+        + "        run: >\n"
+        + "          dotnet pack src/Rendlio.Analyzers/Rendlio.Analyzers.csproj --configuration Release\n"
+        + "          --no-build --output ./artifacts")]
+    // The platform named in the comment above the step instead of on the command. The comment is
+    // the half that does not run, and this step carries exactly such a paragraph today.
+    [InlineData(
+        "      # Pass -p:Platform=AnyCPU here, or pack Rendlio.Analyzers.slnx instead.\n"
+        + "      - name: Pack\n"
+        + "        run: dotnet pack src/Rendlio.Analyzers/Rendlio.Analyzers.csproj --no-build")]
+    public void A_pack_step_that_takes_its_platform_from_the_environment_is_reported(string step) =>
+        Assert.Single(PackPlatformViolations("ci.yml", step));
+
+    [Theory]
+    // The form both workflows use: the flag on a continuation line, away from the verb.
+    [InlineData(
+        "      - name: Pack\n"
+        + "        run: >\n"
+        + "          dotnet pack src/Rendlio.Analyzers/Rendlio.Analyzers.csproj --configuration Release --no-build\n"
+        + "          -p:Platform=AnyCPU --output ./artifacts")]
+    // Packing the solution, which answers the question itself. The other fix, and equally fine.
+    [InlineData(
+        "      - name: Pack\n"
+        + "        run: dotnet pack Rendlio.Analyzers.slnx --configuration Release --no-build --output ./artifacts")]
+    public void A_pack_step_that_names_its_platform_is_clean(string step)
+    {
+        // Asserted before the emptiness, because "no violations" and "no command found" are the
+        // same result here and only one of them means what this case claims.
+        Assert.NotEmpty(PackCommands(step));
+        Assert.Empty(PackPlatformViolations("ci.yml", step));
     }
 
     [Theory]
@@ -175,6 +251,90 @@ public sealed class WorkflowPinsTests
 
         // One violation — the tag — and not the pin next to it.
         Assert.Single(WorkflowPins.Inspect("ci.yml", workflow));
+    }
+
+    /// <summary>
+    /// Returns one message per <c>dotnet pack</c> invocation in <paramref name="workflowText"/> that
+    /// would take its platform from whatever the surrounding environment happens to set.
+    /// </summary>
+    /// <remarks>
+    /// MSBuild reads environment variables as global properties, and <c>Platform</c> is one a
+    /// Visual Studio developer prompt always sets. Building the solution maps the platform onto the
+    /// projects in it — they are AnyCPU, so output lands in <c>bin/Release</c> — but packing a
+    /// project DIRECTLY takes the ambient value instead, moves <c>$(OutputPath)</c> to
+    /// <c>bin/&lt;platform&gt;/Release</c>, and fails NU5019 looking for a build nobody wrote
+    /// there.
+    /// <para>
+    /// A runner sets no <c>Platform</c>, so naming it is a no-op in CI and the entire cost of
+    /// leaving it off is paid by the next person who runs the line by hand — which is precisely the
+    /// kind of argument that gets tidied off a command whose effect nobody here can see. That is
+    /// what this is for: not to make CI work, but to keep the published command copyable.
+    /// </para>
+    /// <para>
+    /// Naming the solution satisfies the rule too, because then the platform is not the command's
+    /// to get wrong. Both fixes are real; the rule is that the command must not be able to inherit
+    /// the answer.
+    /// </para>
+    /// </remarks>
+    private static List<string> PackPlatformViolations(string workflowPath, string workflowText)
+    {
+        var violations = new List<string>();
+
+        foreach (string command in PackCommands(workflowText))
+        {
+            if (!command.Contains("-p:Platform=", StringComparison.Ordinal)
+                && !command.Contains(SolutionTarget, StringComparison.Ordinal))
+            {
+                violations.Add(
+                    $"{workflowPath}: runs '{command}', which takes Platform from the environment and fails NU5019 wherever one is set. Pass -p:Platform=AnyCPU, or pack {SolutionTarget}.");
+            }
+        }
+
+        return violations;
+    }
+
+    /// <summary>
+    /// Every <c>dotnet pack</c> invocation in <paramref name="workflowText"/>, with the arguments it
+    /// passes.
+    /// </summary>
+    /// <remarks>
+    /// Comment lines are dropped and what is left is folded onto one line before searching, in that
+    /// order and for two separate reasons. Folded, because these steps are written as YAML folded
+    /// scalars and the arguments sit on a continuation line: read line by line, every pack step in
+    /// this repository would be the verb with none of its arguments, and the rule would report all
+    /// of them. Comments dropped first, because the step carries a paragraph explaining this very
+    /// rule — fold that in beside the command and a guard passes on its own documentation.
+    /// <para>
+    /// A command runs to the next step's <c>- name:</c>, which is the coarse part of this: a pack
+    /// buried in a multi-line shell script would be read together with whatever surrounds it.
+    /// Nothing here does that, and a reader that understood YAML properly would be a larger thing
+    /// than the rule it serves.
+    /// </para>
+    /// </remarks>
+    private static List<string> PackCommands(string workflowText)
+    {
+        const string verb = "dotnet pack";
+        const string stepBoundary = "- name:";
+
+        string folded = string.Join(
+            ' ',
+            workflowText
+                .Split('\n')
+                .Select(line => line.TrimEnd('\r').Trim())
+                .Where(line => line.Length > 0 && !line.StartsWith('#')));
+
+        var commands = new List<string>();
+
+        for (int start = folded.IndexOf(verb, StringComparison.Ordinal);
+             start >= 0;
+             start = folded.IndexOf(verb, start + verb.Length, StringComparison.Ordinal))
+        {
+            int boundary = folded.IndexOf(stepBoundary, start, StringComparison.Ordinal);
+
+            commands.Add((boundary < 0 ? folded[start..] : folded[start..boundary]).Trim());
+        }
+
+        return commands;
     }
 
     /// <summary>Every workflow file in this repository, in a stable order.</summary>

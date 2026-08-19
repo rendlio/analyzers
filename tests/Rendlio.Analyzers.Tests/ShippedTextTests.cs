@@ -96,6 +96,23 @@ public sealed partial class ShippedTextTests
     }
 
     [Theory]
+    // The package id, which every page here names repeatedly.
+    [InlineData("Install Rendlio.Analyzers from nuget.org.")]
+    [InlineData("The Rendlio.Analyzers package ships two rules.")]
+    // A rule id. Family-scoped by design, and the same two words with no gap between them.
+    [InlineData("RENDLIO001 bans network APIs.")]
+    public void Guard_accepts_the_package_id_and_the_rule_ids(string page)
+    {
+        // The far edge of the rule, and the one worth pinning: an identifier is not a product name.
+        // "Rendlio" plus a capitalised word IS the shape the rule reports, and both of these are one
+        // character away from it — so a later widening of the gap between the two halves, from
+        // horizontal whitespace to \s or to anything admitting '.', turns every page in this
+        // repository red at once and names a product nobody wrote. The naming law is about prose;
+        // the id a consumer types into a PackageReference is not prose.
+        Assert.Empty(ShippedText.Inspect("fixture.md", page));
+    }
+
+    [Theory]
     // The phrasing these pages actually use, and the reason the rule is a lookahead rather than a
     // search for the full phrase: a page that qualifies the association correctly is compliant.
     [InlineData("Rendlio is built by a Swiss association in formation, with profits pledged to charities.")]
