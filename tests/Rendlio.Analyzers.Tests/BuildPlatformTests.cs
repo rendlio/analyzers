@@ -3,8 +3,8 @@ using System.Xml.Linq;
 namespace Rendlio.Analyzers.Tests;
 
 /// <summary>
-/// Holds <c>Directory.Build.props</c> to the platform its projects build for, and holds the rule
-/// itself to props fixtures that break it on purpose.
+/// Holds <c>Directory.Build.props</c> to the platform its projects build for, holds those projects
+/// to not taking it back, and holds both rules to fixtures that break them on purpose.
 /// </summary>
 /// <remarks>
 /// MSBuild reads environment variables as properties, and a Visual Studio Developer Command Prompt
@@ -21,7 +21,11 @@ namespace Rendlio.Analyzers.Tests;
 /// exists for. That second ending is read wherever the condition is written — on the property, on
 /// its <c>PropertyGroup</c>, or on a <c>Choose</c> around it — because the group is where MSBuild
 /// convention puts one and a rule that saw only the inline form would pass the likeliest spelling
-/// of the wrong fix. Both endings are checked here; nothing else in the build can check either.
+/// of the wrong fix. A third ending rewrites nothing at all: MSBuild imports the props before a
+/// project's own body, so a project that names a platform for itself is a later assignment to the
+/// same property and simply wins, while the props goes on reading <c>AnyCPU</c> and a rule that
+/// only read the props goes on reporting the repository clean. All three endings are checked here;
+/// nothing else in the build can check any of them.
 /// </para>
 /// </remarks>
 public sealed class BuildPlatformTests
@@ -55,6 +59,26 @@ public sealed class BuildPlatformTests
         // forbidden; it just has to carry the pin itself or import the one above it with
         // GetPathOfFileAbove, and going red here is how that stays a decision somebody makes.
         Assert.Equal(PropsPath, Assert.Single(PropsFilesInRepository()));
+    }
+
+    [Fact]
+    public void No_project_takes_the_platform_back_after_the_props_pinned_it()
+    {
+        // The other end of the same pin, and the one place it can be undone without touching the
+        // file the rules above read. A project's own body is evaluated after the props it imports,
+        // so a <Platform> written in a csproj is a later assignment to the same property and simply
+        // wins: $(OutputPath) returns to bin/<platform>/Release, the pack that skips the build fails
+        // NU5019 again, and the root props still says AnyCPU — so every rule above stays green while
+        // the pin no longer reaches the project it exists for. Nothing here is platform-specific, so
+        // the rule is that no project names a platform at all.
+        List<string> projects = ProjectFilesInRepository();
+
+        // Non-vacuous, for the reason the sweep below cannot be: it has to have reached the project
+        // whose $(OutputPath) the pack item reads, or finding nothing to inspect would read as
+        // finding nothing wrong.
+        Assert.Contains(PackableProjectPath, projects);
+        Assert.Empty(projects.SelectMany(path => ProjectPlatformOverrides(
+            Path.GetRelativePath(RepositoryLayout.Root, path), File.ReadAllText(path))));
     }
 
     [Theory]
@@ -144,8 +168,86 @@ public sealed class BuildPlatformTests
         // mean a pin was found and accepted.
         Assert.Empty(PlatformPinViolations(PropsFile, props));
 
+    [Theory]
+    // A project naming its own platform. This is the shape that defeats the pin while leaving it
+    // written where the rules above read it.
+    [InlineData(
+        """
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>netstandard2.0</TargetFramework>
+            <Platform>x64</Platform>
+          </PropertyGroup>
+        </Project>
+        """)]
+    // Conditioned, and reported all the same — unlike on the props, where a condition is what stops
+    // a pin firing. Here it only narrows when the override applies; whenever it holds, the project's
+    // value is still the later assignment and still wins.
+    [InlineData(
+        """
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup Condition="'$(OS)' == 'Windows_NT'">
+            <Platform>x86</Platform>
+          </PropertyGroup>
+        </Project>
+        """)]
+    // Even set to the platform the pin already names. Agreeing today is not the point: the property
+    // has one home, and a second copy is what drifts from it.
+    [InlineData(
+        """
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <Platform>AnyCPU</Platform>
+          </PropertyGroup>
+        </Project>
+        """)]
+    public void A_project_that_names_its_own_platform_is_reported(string project) =>
+        Assert.Single(ProjectPlatformOverrides("Some.csproj", project));
+
+    [Theory]
+    // The shape every project in this repository has: it says nothing about a platform and inherits
+    // the one the props pinned.
+    [InlineData(
+        """
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>netstandard2.0</TargetFramework>
+          </PropertyGroup>
+        </Project>
+        """)]
+    // PlatformTarget is a different property — it names what the compiler emits, not where the
+    // build writes — and $(OutputPath) does not read it. A rule that fired on a prefix or a
+    // near-miss would forbid a legitimate setting, so the exact-name match is proven, not assumed.
+    [InlineData(
+        """
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <PlatformTarget>AnyCPU</PlatformTarget>
+          </PropertyGroup>
+        </Project>
+        """)]
+    public void A_project_that_leaves_the_platform_to_the_pin_is_clean(string project) =>
+        Assert.Empty(ProjectPlatformOverrides("Some.csproj", project));
+
     /// <summary>The props file this repository is held to, at the root every project walks up to.</summary>
     private static string PropsPath => Path.Combine(RepositoryLayout.Root, PropsFile);
+
+    /// <summary>
+    /// The project whose <c>$(OutputPath)</c> the pack item reads, which is the one the pin exists
+    /// for and therefore the one the sweep has to have seen.
+    /// </summary>
+    private static string PackableProjectPath =>
+        Path.Combine(RepositoryLayout.Root, "src", "Rendlio.Analyzers", "Rendlio.Analyzers.csproj");
+
+    /// <summary>Every project file in the repository, build output aside.</summary>
+    /// <remarks>
+    /// Enumerated rather than listed, because a project added later inherits the pin and can undo it
+    /// the same way, and a rule naming today's two would not notice.
+    /// </remarks>
+    private static List<string> ProjectFilesInRepository() =>
+        [.. Directory.EnumerateFiles(RepositoryLayout.Root, "*.csproj", SearchOption.AllDirectories)
+            .Where(path => !IsBuildOutput(path))
+            .OrderBy(path => path, StringComparer.Ordinal)];
 
     /// <summary>
     /// Every file of that name in the repository, build output aside — which should be the root's
@@ -162,26 +264,33 @@ public sealed class BuildPlatformTests
             .OrderBy(path => path, StringComparer.Ordinal)];
 
     /// <summary>True when <paramref name="path"/> sits under a <c>bin</c> or <c>obj</c> directory.</summary>
+    /// <remarks>
+    /// Tested against the path relative to the repository root, not the absolute one: a checkout
+    /// living under a directory of either name — <c>C:\bin\analyzers</c> — would otherwise classify
+    /// every file in the repository as output and leave both sweeps above with nothing to inspect.
+    /// The leading slash is what lets one test cover <c>bin/</c> at the root and <c>src/x/bin/</c>
+    /// alike.
+    /// </remarks>
     private static bool IsBuildOutput(string path)
     {
-        string normalised = path.Replace('\\', '/');
+        string normalised = "/" + Path.GetRelativePath(RepositoryLayout.Root, path).Replace('\\', '/');
 
         return normalised.Contains("/bin/", StringComparison.Ordinal)
             || normalised.Contains("/obj/", StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// Every property element in <paramref name="propsText"/> — anything written directly inside a
-    /// <c>PropertyGroup</c>.
+    /// Every property element in <paramref name="msbuildText"/> — anything written directly inside a
+    /// <c>PropertyGroup</c>, in a props file or a project alike.
     /// </summary>
     /// <remarks>
     /// Matched on local names, so the reader works whether or not the file carries the old MSBuild
-    /// XML namespace. This one does not, because SDK-style projects dropped it; a namespace is
+    /// XML namespace. Nothing here does, because SDK-style projects dropped it; a namespace is
     /// still the kind of detail a tool puts back, and a reader that silently found nothing
     /// afterwards would report the repository clean for having become unreadable.
     /// </remarks>
-    private static List<XElement> PropertyElements(string propsText) =>
-        [.. XDocument.Parse(propsText)
+    private static List<XElement> PropertyElements(string msbuildText) =>
+        [.. XDocument.Parse(msbuildText)
             .Descendants()
             .Where(element => element.Parent?.Name.LocalName == "PropertyGroup")];
 
@@ -233,4 +342,21 @@ public sealed class BuildPlatformTests
 
         return violations;
     }
+
+    /// <summary>
+    /// Returns one message per platform <paramref name="projectText"/> names for itself, or an empty
+    /// list when it leaves the property to the pin it inherits. <paramref name="projectPath"/> only
+    /// names the file in a message; nothing is read from disk.
+    /// </summary>
+    /// <remarks>
+    /// Conditions are not read here, unlike on the props: there a condition is how a pin stops
+    /// firing, while in a project it only narrows when an override applies — and whenever it applies
+    /// it is still the later assignment and still wins. No project in this repository has a reason to
+    /// name a platform, which makes "none, however written" the whole rule.
+    /// </remarks>
+    private static List<string> ProjectPlatformOverrides(string projectPath, string projectText) =>
+        [.. PropertyElements(projectText)
+            .Where(property => property.Name.LocalName == "Platform")
+            .Select(property =>
+                $"{projectPath}: sets <Platform>{property.Value.Trim()}</Platform> for itself. A project body is evaluated after the {PropsFile} it imports, so this is the value $(OutputPath) follows — back out to bin/<platform>/, where a pack that skips the build finds nothing and reports NU5019. Delete it and inherit the repository-wide pin.")];
 }
