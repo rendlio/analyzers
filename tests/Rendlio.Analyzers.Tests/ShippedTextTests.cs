@@ -714,6 +714,62 @@ public sealed partial class ShippedTextTests
         }
     }
 
+    [Theory]
+    [InlineData("de-DE")]
+    [InlineData("tr-TR")]
+    public async Task The_reason_column_reads_the_same_under_any_culture(string culture)
+    {
+        // The rule-side culture cases pin the verdict and the message; this pins the page-side walk
+        // that holds one against the other. A contributor edits the page on their own machine under
+        // their own locale, and this guard is what tells them the edit is wrong. Every comparison it
+        // makes is ordinal or invariant today — the cell/reason equality, the split on the message
+        // format's two arguments, the `|` and `#` line tests the extractor runs — so what is pinned
+        // is the invariance itself rather than any one of those flags. The hazard is a later tidy-up
+        // into a culture-aware or case-insensitive form: the guard would then hold the page to the
+        // rule on some machines and not others, and CI, which runs neither culture, would agree with
+        // whichever it happened to be. Both directions are asserted, because a walk gone
+        // culture-sensitive can fail either way round — reporting a clean page, or passing a bad one.
+        CultureInfo previousCulture = CultureInfo.CurrentCulture;
+        CultureInfo previousUiCulture = CultureInfo.CurrentUICulture;
+
+        try
+        {
+            var target = new CultureInfo(culture);
+            CultureInfo.CurrentCulture = target;
+            CultureInfo.CurrentUICulture = target;
+
+            string[] reasons = await ReasonsRendlio001Gives(EveryRowOfTheTable);
+
+            // Probed after the await rather than before it, so what is checked is the culture in
+            // force where the page is read and compared, not merely where the test started.
+            ShouldBeUnderARealCulture(culture);
+
+            string[][] rows = RowsOfTheBannedApiTable();
+
+            Assert.NotEmpty(rows);
+            Assert.Empty(ReasonMismatches(rows, reasons));
+            Assert.NotEmpty(ReasonMismatches([FrontHalf(rows[0]), .. rows[1..]], reasons));
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = previousCulture;
+            CultureInfo.CurrentUICulture = previousUiCulture;
+        }
+    }
+
+    /// <summary>
+    /// That the ambient culture is the one asked for, and that it carries its own data. The name
+    /// alone would not do: under <c>InvariantGlobalization</c> a fabricated culture still reports
+    /// its name while carrying invariant data, so the name check passes and every assertion after it
+    /// is vacuous. Formatting a number is the cheapest probe that reads the real data — both
+    /// cultures here write the separator as a comma, where the invariant one writes a point.
+    /// </summary>
+    private static void ShouldBeUnderARealCulture(string expected)
+    {
+        Assert.Equal(expected, CultureInfo.CurrentCulture.Name);
+        Assert.Equal("1,5", 1.5.ToString(CultureInfo.CurrentCulture));
+    }
+
     /// <summary>The rows of RENDLIO001's table, as the page on disk carries them.</summary>
     private static string[][] RowsOfTheBannedApiTable() =>
     [
