@@ -78,4 +78,6 @@ projects.
 ## Related
 
 - [RENDLIO001](RENDLIO001.md) — the banned-API ban.
+- [All rules](README.md) — the index: id allocation, the two categories, and what a suppression
+  costs.
 - [Triage policy](../../TRIAGE.md) — what happens to an issue or a pull request about this rule.

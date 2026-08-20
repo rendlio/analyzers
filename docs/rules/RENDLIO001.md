@@ -80,4 +80,6 @@ want the ban — dropping the package reference for it says so more clearly than
 ## Related
 
 - [RENDLIO002](RENDLIO002.md) — the non-deterministic-API ban.
+- [All rules](README.md) — the index: id allocation, the two categories, and what a suppression
+  costs.
 - [Triage policy](../../TRIAGE.md) — what happens to an issue or a pull request about this rule.

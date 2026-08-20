@@ -23,6 +23,10 @@ Apache-2.0. Free to use, fork and vendor.
 Both report at severity error by default: installing the package is how you ask for that. Each
 page says what the rule deliberately does *not* report, and how to scope or suppress it.
 
+The [rules index](https://github.com/Rendlio/analyzers/blob/main/docs/rules/README.md) is the
+full list, and carries what is true of every rule rather than of one: how ids are allocated, what
+the two categories are for, the three ways to turn a rule off, and what each of them costs.
+
 ## Why this exists
 
 Rendlio Sheets makes two promises about its rendering engine: it never phones home, and the

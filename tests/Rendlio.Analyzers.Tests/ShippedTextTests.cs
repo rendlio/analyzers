@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Diagnostics;
@@ -11,7 +12,7 @@ namespace Rendlio.Analyzers.Tests;
 /// pages make into this repository are resolved with <see cref="PageLinks"/> and checked against
 /// the files on disk, so a rename cannot quietly leave a page pointing at nothing.
 /// </summary>
-public sealed class ShippedTextTests
+public sealed partial class ShippedTextTests
 {
     private const string SolutionFile = "Rendlio.Analyzers.slnx";
 
@@ -226,6 +227,143 @@ public sealed class ShippedTextTests
         // Guards the guard: an empty pack would otherwise report green forever.
         Assert.NotEqual(0, linksChecked);
         Assert.Empty(broken);
+    }
+
+    // ------------------------------------------------- the rules index, and the links that reach it
+
+    /// <summary>The published index of the rules this package ships.</summary>
+    private const string RulesIndex = "docs/rules/README.md";
+
+    [Fact]
+    public void The_readme_links_to_the_rules_index()
+    {
+        // Same reasoning as the triage policy above: the README is what nuget.org renders and the
+        // only page a consumer is guaranteed to land on, so a page it does not link to is a page
+        // nobody finds. Asserted through the resolver rather than by searching for a literal, so
+        // it holds for either spelling of the link.
+        IReadOnlyList<string> targets = PageLinks.RepositoryTargets(
+            "README.md",
+            File.ReadAllText(Path.Combine(RepositoryRoot, "README.md")),
+            RepositoryUrl);
+
+        Assert.Contains(RulesIndex, targets);
+    }
+
+    [Fact]
+    public void Every_shipped_rule_is_listed_in_the_rules_index()
+    {
+        // The other half of the promise the help links make. A rule whose page exists but is
+        // reachable only by already knowing its id is documented for someone who does not need the
+        // documentation; the reader who needs it arrived from the README with no id in hand. This
+        // is also what makes the index self-maintaining: syncing a rule in without listing it here
+        // fails the build rather than shipping an index that silently understates the pack.
+        IReadOnlyList<string> listed = PageLinks.RepositoryTargets(
+            RulesIndex,
+            File.ReadAllText(Path.Combine(RepositoryRoot, RulesIndex)),
+            RepositoryUrl);
+
+        List<string> missing = [];
+        int rulesChecked = 0;
+
+        foreach (Type type in AnalyzerConventions.AnalyzersIn(Assembly.Load("Rendlio.Analyzers")))
+        {
+            if (Activator.CreateInstance(type) is not DiagnosticAnalyzer analyzer)
+            {
+                continue;
+            }
+
+            foreach (DiagnosticDescriptor rule in analyzer.SupportedDiagnostics)
+            {
+                rulesChecked++;
+
+                // Compared as the page the rule points at rather than as the id, so the two
+                // spellings — the absolute help link and the index's relative one — are resolved by
+                // the same resolver before being matched against each other.
+                string? page = PageLinks
+                    .RepositoryTargets("README.md", $"[{rule.Id}]({rule.HelpLinkUri})", RepositoryUrl)
+                    .SingleOrDefault();
+
+                if (page is null || !listed.Contains(page, StringComparer.Ordinal))
+                {
+                    missing.Add($"{rule.Id}: its page is not linked from {RulesIndex}.");
+                }
+            }
+        }
+
+        // Guards the guard, as above: an empty pack would report green forever.
+        Assert.NotEqual(0, rulesChecked);
+        Assert.Empty(missing);
+    }
+
+    /// <summary>An <c>.editorconfig</c> severity key, capturing the rule id it names.</summary>
+    [GeneratedRegex(@"dotnet_diagnostic\.([^.\s]+)\.severity", RegexOptions.CultureInvariant)]
+    private static partial Regex ConfiguredRule();
+
+    /// <summary>A bulk-configuration key, capturing the category it names.</summary>
+    [GeneratedRegex(@"dotnet_analyzer_diagnostic\.category-([^.\s]+(?:\.[^.\s]+)*)\.severity", RegexOptions.CultureInvariant)]
+    private static partial Regex ConfiguredCategory();
+
+    /// <summary>A pragma, capturing the rule id it names.</summary>
+    [GeneratedRegex(@"#pragma warning (?:disable|restore) (\S+)", RegexOptions.CultureInvariant)]
+    private static partial Regex PragmaRule();
+
+    [Fact]
+    public void Every_suppression_a_published_page_shows_names_something_this_pack_ships()
+    {
+        // A suppression snippet is the one thing on these pages a reader copies verbatim rather
+        // than reads, so a typo in one does not look like a typo — it looks like a rule that
+        // ignores configuration, and the reader concludes the pack cannot be turned off. Nothing
+        // else catches it: a misspelled id is a perfectly valid .editorconfig line that silences
+        // nothing, and no build anywhere warns about it.
+        var shippedRules = new HashSet<string>(StringComparer.Ordinal);
+        var shippedCategories = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (Type type in AnalyzerConventions.AnalyzersIn(Assembly.Load("Rendlio.Analyzers")))
+        {
+            if (Activator.CreateInstance(type) is not DiagnosticAnalyzer analyzer)
+            {
+                continue;
+            }
+
+            foreach (DiagnosticDescriptor rule in analyzer.SupportedDiagnostics)
+            {
+                shippedRules.Add(rule.Id);
+                shippedCategories.Add(rule.Category);
+            }
+        }
+
+        List<string> unknown = [];
+        int suppressionsChecked = 0;
+
+        foreach (string page in PublishedPages())
+        {
+            string relativePage = Normalise(Path.GetRelativePath(RepositoryRoot, page));
+            string text = File.ReadAllText(page);
+
+            foreach ((Regex pattern, ISet<string> shipped, string what) in new[]
+                     {
+                         (ConfiguredRule(), (ISet<string>)shippedRules, "rule"),
+                         (PragmaRule(), shippedRules, "rule"),
+                         (ConfiguredCategory(), shippedCategories, "category"),
+                     })
+            {
+                foreach (Match match in pattern.Matches(text))
+                {
+                    suppressionsChecked++;
+                    string named = match.Groups[1].Value;
+
+                    if (!shipped.Contains(named))
+                    {
+                        unknown.Add($"{relativePage}: shows '{match.Value}', but no shipped {what} is named '{named}'.");
+                    }
+                }
+            }
+        }
+
+        // Guards the guard: pages that stopped carrying suppression snippets, or a pattern that
+        // stopped matching them, would leave nothing to check and report green.
+        Assert.NotEqual(0, suppressionsChecked);
+        Assert.Empty(unknown);
     }
 
     /// <summary>
