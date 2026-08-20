@@ -100,7 +100,15 @@ the test suite fails the build if one does not, or if the page it points at is m
 
 ## Building
 
-Requires the .NET SDK pinned in `global.json`.
+Requires a .NET SDK from the `10.0.4xx` feature band. `global.json` pins `10.0.400` and rolls
+forward only inside that band, so a machine without it stops with a message naming what to install
+rather than building.
+
+The strictness is the point. The analyzers that decide whether this repository compiles ship inside
+the SDK, and a different feature band bundles a different rule set — so with warnings as errors, a
+band that drifts is a build that is green in CI and red on somebody's desk on the same commit, with
+nothing in the diff to explain it. CI installs the version pinned here and nothing else; holding
+local resolution to the same band is what keeps the two verdicts one verdict.
 
 ```sh
 dotnet build Rendlio.Analyzers.slnx
