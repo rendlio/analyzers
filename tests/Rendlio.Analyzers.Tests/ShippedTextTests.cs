@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Reflection;
 using System.Text.RegularExpressions;
@@ -577,6 +578,192 @@ public sealed partial class ShippedTextTests
             .Select(static type => Activator.CreateInstance(type) as DiagnosticAnalyzer)
             .Where(static analyzer => analyzer is not null)
             .SelectMany(static analyzer => analyzer!.SupportedDiagnostics);
+
+    // ------------------------------------ the banned-API table, and the reasons its rows quote
+
+    /// <summary>RENDLIO001's page, whose table restates the reason each row gives.</summary>
+    private const string BannedApiPage = "docs/rules/RENDLIO001.md";
+
+    /// <summary>
+    /// The heading over that table. The page carries two, and the other one is the rule's metadata.
+    /// </summary>
+    private const string BannedApiTableHeading = "## What it reports";
+
+    /// <summary>
+    /// One use of every row of RENDLIO001's table, and nothing else the rule reports.
+    /// </summary>
+    /// <remarks>
+    /// Exactly one diagnostic per row is what makes the count below a guard rather than arithmetic.
+    /// The three <c>Assembly</c> overloads share a row and are called once between them; members
+    /// reached through a banned type stay silent on purpose, because the type reference carries
+    /// their diagnostic. So a row added to the page with no use added here fails on the count
+    /// before it can fail on a reason, and says which of the two went missing.
+    /// </remarks>
+    private const string EveryRowOfTheTable = """
+        using System.Runtime.InteropServices;
+
+        namespace Example;
+
+        internal static class Sut
+        {
+            internal static void Spawn(string name) => System.Diagnostics.Process.Start(name);
+
+            internal static object Emit() => typeof(System.Reflection.Emit.DynamicMethod);
+
+            internal static object Load(string name) => System.Reflection.Assembly.Load(name);
+
+            internal static object FromStream(System.IO.Stream part) =>
+                System.Runtime.Loader.AssemblyLoadContext.Default.LoadFromStream(part);
+
+            internal static object? Activate(string name) => System.Activator.CreateInstance(name, name);
+
+            internal static System.Type? Resolve(string name) => System.Type.GetType(name);
+
+            internal static object Net() => typeof(System.Net.Http.HttpClient);
+
+            [DllImport("native")]
+            internal static extern int Version();
+        }
+        """;
+
+    [Fact]
+    public async Task The_banned_api_page_quotes_the_reason_each_row_actually_gives()
+    {
+        // The column is headed "Reason given in the message", which is a promise about the build
+        // log the reader has open beside the page rather than a summary of the row. A cell that
+        // paraphrases instead of quoting sends someone searching their log for a sentence the rule
+        // never prints, and the row they are standing on is the one they conclude does not apply.
+        // Nothing else catches it: the rule's own cases assert WHICH api each row names and never
+        // what it says about it, so before this the whole column was unread.
+        string[][] rows = [.. TableRowsUnder(
+            File.ReadAllText(Path.Combine(RepositoryRoot, BannedApiPage)),
+            BannedApiTableHeading)];
+
+        ImmutableArray<Diagnostic> reported =
+            await AnalyzerHarness.RunAsync(new BannedApiAnalyzer(), "Consumer", EveryRowOfTheTable);
+
+        string[] messages = [.. reported.Select(static d => d.GetMessage(CultureInfo.InvariantCulture))];
+
+        // Guards the guard: a heading rename, a reshaped table or a fixture that stopped tripping a
+        // row would leave reasons nobody compared, and the walk below would pass over them green.
+        Assert.NotEmpty(rows);
+        Assert.Equal(rows.Length, messages.Length);
+
+        List<string> wrong = [];
+
+        foreach (string[] cells in rows)
+        {
+            string reason = Reason(cells);
+
+            if (!messages.Any(message => message.Contains(reason, StringComparison.Ordinal)))
+            {
+                wrong.Add(
+                    $"{BannedApiPage}: the row for {Banned(cells)} gives its reason as '{reason}', "
+                    + "but nothing the rule reports says that.");
+            }
+        }
+
+        foreach (string message in messages)
+        {
+            if (!rows.Any(cells => message.Contains(Reason(cells), StringComparison.Ordinal)))
+            {
+                wrong.Add($"RENDLIO001 reports '{message}', but no row on {BannedApiPage} quotes that reason.");
+            }
+        }
+
+        Assert.Empty(wrong);
+    }
+
+    /// <summary>The api a table row names, for naming the row in a message.</summary>
+    private static string Banned(string[] cells) => cells.Length > 0 ? cells[0] : "<an empty row>";
+
+    /// <summary>
+    /// The reason a table row quotes, stripped of the page's own emphasis. A row too short to carry
+    /// one reads as a mismatch rather than an exception, the way a reshaped index row does above.
+    /// </summary>
+    private static string Reason(string[] cells) =>
+        cells.Length > 1 ? cells[1].Trim('`') : "<no such column>";
+
+    /// <summary>
+    /// The data rows of the first Markdown table under <paramref name="heading"/>, each as its
+    /// cells with the surrounding whitespace gone.
+    /// </summary>
+    /// <remarks>
+    /// The row naming the columns and the <c>---</c> rule beneath it are punctuation rather than
+    /// data and are dropped, as are the empty leading and trailing fields a pipe-delimited row
+    /// splits into. Returns nothing when the section carries no table, which the caller's own
+    /// guard turns into a failure — an extractor that quietly returned nothing would otherwise let
+    /// every rule read over the table report green.
+    /// </remarks>
+    private static IReadOnlyList<string[]> TableRowsUnder(string markdown, string heading)
+    {
+        List<string[]> rows = [];
+        bool inSection = false;
+
+        foreach (string line in markdown.Split('\n'))
+        {
+            // Trimmed rather than read as written, so a page with CRLF endings reads the same as
+            // one without: the carriage return is the last character of every line there.
+            string trimmed = line.Trim();
+
+            if (!inSection)
+            {
+                inSection = string.Equals(trimmed, heading, StringComparison.Ordinal);
+                continue;
+            }
+
+            if (trimmed.StartsWith('|'))
+            {
+                rows.Add([.. trimmed.Split('|')[1..^1].Select(static cell => cell.Trim())]);
+                continue;
+            }
+
+            // Once the table has started, the first line that is not a row has ended it; before it,
+            // this is the prose between the heading and the table. A new heading ends the section
+            // either way, so a section carrying no table cannot borrow the next one's.
+            if (rows.Count > 0 || trimmed.StartsWith('#'))
+            {
+                break;
+            }
+        }
+
+        return [.. rows.Skip(1).Where(static cells => !IsRule(cells))];
+    }
+
+    /// <summary>Whether every cell of a row is the <c>---</c> the table is drawn from.</summary>
+    private static bool IsRule(string[] cells) =>
+        cells.Length > 0
+        && cells.All(static cell => cell.Length > 0 && cell.All(static character => character is '-' or ':'));
+
+    [Fact]
+    public void A_table_is_read_as_its_data_rows_and_not_as_its_header()
+    {
+        // The extractor decides how many reasons get compared, so one that kept the header row or
+        // the rule under it would hold a diagnostic against punctuation and fail for a reason that
+        // has nothing to do with the page.
+        IReadOnlyList<string[]> rows = TableRowsUnder(
+            "## What it reports\n\nProse first.\n\n| Banned | Reason |\n| --- | :--- |\n"
+            + "| `A` | first |\n| `B` | second |\n\nProse after.\n",
+            "## What it reports");
+
+        Assert.Equal(2, rows.Count);
+        Assert.Equal("`A`", rows[0][0]);
+        Assert.Equal("first", rows[0][1]);
+        Assert.Equal("`B`", rows[1][0]);
+        Assert.Equal("second", rows[1][1]);
+    }
+
+    [Fact]
+    public void A_table_belonging_to_another_section_is_not_read_as_this_one()
+    {
+        // The page opens with a metadata table and this one sits further down, so an extractor that
+        // took the first table it found, or ran on past an empty section into the next one, would
+        // compare a category and a severity against a diagnostic message.
+        Assert.Empty(TableRowsUnder(
+            "| | |\n| --- | --- |\n| **Category** | `Rendlio.Security` |\n\n## What it reports\n\n"
+            + "Nothing yet.\n\n## Something else\n\n| Banned | Reason |\n| --- | --- |\n| `A` | first |\n",
+            "## What it reports"));
+    }
 
     /// <summary>An <c>.editorconfig</c> severity key, capturing the rule id it names.</summary>
     [GeneratedRegex(@"dotnet_diagnostic\.([^.\s]+)\.severity", RegexOptions.CultureInvariant)]

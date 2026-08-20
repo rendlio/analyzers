@@ -21,7 +21,7 @@ each of them a compile error rather than a code-review comment.
 | `System.Activator.CreateInstance(string, …)` | no reflection over input-derived type names |
 | `System.Type.GetType(string)` | no reflection over input-derived type names |
 | `System.Net.*`, the whole namespace tree | zero network I/O; zero phone-home |
-| `[DllImport]` and `[LibraryImport]` declarations | native interop can reach all of the above |
+| `[DllImport]` and `[LibraryImport]` declarations | native interop can reach the network, the host and the loader, and no analyzer can see past it |
 
 ```csharp
 // error RENDLIO001: 'System.Net.Http.HttpClient' is banned in this project
