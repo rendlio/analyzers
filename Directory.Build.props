@@ -42,6 +42,18 @@
     <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
 
+  <!-- ======================== Restore pinning =========================== -->
+  <PropertyGroup>
+    <!-- Why: Directory.Packages.props pins the versions this repository *asks* for; a lock
+         file pins what restore actually *resolved*, which includes the transitive graph
+         nobody wrote down. Without one there is nothing for a restore to disagree with, so
+         a cold restore re-resolves from the feed and reports success either way, and a
+         dependency that moved underneath a pin is invisible rather than loud. The lock files
+         are committed, and CI restores in locked mode so a graph that no longer matches the
+         lock file fails the build instead of being adopted in silence. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
   <!-- ===================== Reproducible output ========================== -->
   <PropertyGroup>
     <!-- Why: this pack exists to prove determinism in someone else's build, so its own

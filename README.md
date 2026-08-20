@@ -107,6 +107,11 @@ dotnet build Rendlio.Analyzers.slnx
 dotnet test Rendlio.Analyzers.slnx
 ```
 
+The committed `packages.lock.json` files record the dependency graph the pinned versions resolve
+to, so a build here restores what CI restores. Changing a version in `Directory.Packages.props`
+rewrites them on the next restore; commit that with the change, because CI restores in locked mode
+and stops on a graph the lock files do not describe.
+
 The analyzer assembly targets `netstandard2.0`. That is a Roslyn requirement rather than a
 preference: a compiler host may be .NET Framework (Visual Studio) or .NET (`dotnet build`),
 and `netstandard2.0` is the only target both can load.

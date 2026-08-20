@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Reflection;
 using System.Runtime.Versioning;
+using System.Xml.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Diagnostics;
 
@@ -14,6 +15,9 @@ namespace Rendlio.Analyzers.Tests;
 /// </summary>
 public sealed class AnalyzerConventionTests
 {
+    /// <summary>The package whose pinned version is the compiler floor this pack claims.</summary>
+    private const string CompilerPackage = "Microsoft.CodeAnalysis.CSharp";
+
     /// <summary>
     /// The pack as it is actually built, loaded by name rather than through a type handle —
     /// the assembly is expected to be empty of rules until they are synced in, and an empty
@@ -36,6 +40,47 @@ public sealed class AnalyzerConventionTests
 
         Assert.NotNull(target);
         Assert.Equal(".NETStandard,Version=v2.0", target.FrameworkName);
+    }
+
+    [Fact]
+    public void Shipping_assembly_binds_no_compiler_newer_than_the_declared_floor()
+    {
+        // The other half of the rule above. netstandard2.0 settles which runtime can load this
+        // assembly; the Roslyn version it binds against settles which compiler host can.
+        // Directory.Packages.props pins Microsoft.CodeAnalysis.CSharp deliberately below the
+        // version the engine repository builds on, and calls raising that pin a consumer-visible
+        // breaking change — a claim that until now lived only in a comment, inside the very file
+        // someone edits in order to raise it.
+        //
+        // Read off the built assembly rather than off the project files, because the binding is
+        // what a host actually resolves: a PackageReference added without a central version, or a
+        // transitive bump reaching the compile, moves the floor without touching the pin.
+        Version floor = DeclaredCompilerFloor();
+
+        var compilerReferences = ShippingAssembly.GetReferencedAssemblies()
+            .Where(reference => reference.Name is not null
+                && reference.Name.StartsWith("Microsoft.CodeAnalysis", StringComparison.Ordinal))
+            .ToList();
+
+        // Guards the guard: a rule about Roslyn references passes over an empty set the moment this
+        // assembly stops referencing Roslyn, which for an analyzer means it stopped being one.
+        Assert.NotEmpty(compilerReferences);
+
+        foreach (AssemblyName reference in compilerReferences)
+        {
+            Assert.NotNull(reference.Version);
+
+            // Compared on three components: an assembly version always carries a fourth and a
+            // package version never does, so 4.8.0.0 would otherwise read as above 4.8.0.
+            var bound = new Version(
+                reference.Version.Major,
+                reference.Version.Minor,
+                reference.Version.Build);
+
+            Assert.True(
+                bound <= floor,
+                $"{reference.Name} is bound at {bound}, above the {floor} floor Directory.Packages.props pins. Every compiler host older than the new floor stops loading this pack, so raising it is a breaking change for consumers rather than a dependency bump.");
+        }
     }
 
     [Fact]
@@ -109,6 +154,28 @@ public sealed class AnalyzerConventionTests
             CultureInfo.CurrentCulture = previousCulture;
             CultureInfo.CurrentUICulture = previousUiCulture;
         }
+    }
+
+    /// <summary>
+    /// The compiler version this pack is pinned to build against, read from the one file that
+    /// decides it — so the floor cannot be raised in one place and asserted from another.
+    /// </summary>
+    private static Version DeclaredCompilerFloor()
+    {
+        var props = XDocument.Load(
+            Path.Combine(RepositoryLayout.Root, "Directory.Packages.props"));
+
+        string pinned = props.Descendants("PackageVersion")
+            .Where(element => element.Attribute("Include")?.Value == CompilerPackage)
+            .Select(element => element.Attribute("Version")?.Value)
+            .FirstOrDefault(version => !string.IsNullOrEmpty(version))
+            ?? throw new InvalidOperationException(
+                $"Directory.Packages.props pins no {CompilerPackage} version, so the compiler floor this rule is about has no stated value to compare against.");
+
+        // A prerelease suffix is not something an assembly version can express, and this pin has
+        // never carried one; taking the release part keeps the comparison meaningful if it ever
+        // does.
+        return Version.Parse(pinned.Split('-')[0]);
     }
 
     // ------------------------------------------------------------------ fixtures

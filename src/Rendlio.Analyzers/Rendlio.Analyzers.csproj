@@ -44,12 +44,25 @@
                       IncludeAssets="runtime; build; native; contentfiles; analyzers; buildtransitive" />
   </ItemGroup>
 
-  <ItemGroup>
-    <!-- Release tracking (RS2008): every rule id this assembly reports is declared in one of
-         these two files, so adding or retiring a rule is a reviewable diff. -->
-    <AdditionalFiles Include="AnalyzerReleases.Shipped.md" />
-    <AdditionalFiles Include="AnalyzerReleases.Unshipped.md" />
-  </ItemGroup>
+  <!--
+    Release tracking (RS2008): every rule id this assembly reports is declared in one of
+    AnalyzerReleases.Shipped.md / AnalyzerReleases.Unshipped.md, so adding or retiring a rule is
+    a reviewable diff.
+
+    Neither file is listed as an <AdditionalFiles> here, deliberately.
+    Microsoft.CodeAnalysis.Analyzers adds them itself — its own
+    buildTransitive targets include each file when it exists in the project directory — so listing them again puts each identity in
+    @(AdditionalFiles) twice. The compiler does not mind, but every Roslyn workspace load then
+    reports "Duplicate source file", which is what "Warnings were encountered while loading the
+    workspace" means when `dotnet format` prints it on an otherwise green run — in a CI log that
+    runs format at diagnostic verbosity, so the noise is permanent and points at nothing.
+
+    Leaning on the package's include costs no control, because the include and RS2008 arrive from
+    the same package: there is no state in which the files are needed and the include is
+    absent. Were a future version to stop adding them, RS2008 would report every shipped rule id as
+    untracked and the build would fail under warnings-as-errors — loud, which is the failure mode
+    worth having.
+  -->
 
   <ItemGroup>
     <!-- analyzers/dotnet/cs is the path NuGet reads to install a C# analyzer; anything

@@ -1,11 +1,14 @@
 # ci.yml — pull-request and main CI for Rendlio.Analyzers.
 #
 # Gates enforced here:
-#   1. Build with warnings-as-errors, on Linux and Windows.
-#   2. The full test suite, including the conventions every shipped rule must satisfy.
-#   3. Formatting: `dotnet format --verify-no-changes` — the .editorconfig rules the
+#   1. Restore in locked mode: the committed packages.lock.json files still describe the graph
+#      the pinned versions resolve to, content hashes included. A dependency that moved
+#      underneath a pin fails here (NU1004) rather than being adopted with nothing to read.
+#   2. Build with warnings-as-errors, on Linux and Windows.
+#   3. The full test suite, including the conventions every shipped rule must satisfy.
+#   4. Formatting: `dotnet format --verify-no-changes` — the .editorconfig rules the
 #      compiler cannot see (charset, line endings, final newline, trailing whitespace).
-#   4. Pack: the analyzer assembly still lands at analyzers/dotnet/cs, which is the only
+#   5. Pack: the analyzer assembly still lands at analyzers/dotnet/cs, which is the only
 #      path NuGet reads. A pack that silently stops producing it installs as a no-op.
 #
 # This workflow needs NO secrets. Keep it that way: releasing is a separate workflow with
@@ -58,7 +61,11 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore Rendlio.Analyzers.slnx
+        # Locked mode compares the graph against a lock file only when there is one to read: a
+        # restore that finds none writes it and exits 0. So a deleted packages.lock.json turns
+        # this gate off with a green run, and a test in tests/Rendlio.Analyzers.Tests fails the
+        # build if any project stops carrying one.
+        run: dotnet restore Rendlio.Analyzers.slnx --locked-mode
 
       - name: Build
         run: dotnet build Rendlio.Analyzers.slnx --configuration Release --no-restore
