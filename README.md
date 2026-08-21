@@ -63,9 +63,14 @@ The analyzer assembly targets `netstandard2.0`. That is a Roslyn requirement rat
 preference: a compiler host may be .NET Framework (Visual Studio) or .NET (`dotnet build`),
 and `netstandard2.0` is the only target both can load.
 
-## Contributing
+## Support and contributing
 
-Issues and pull requests are welcome. Two things worth knowing before you open one:
+Issues and pull requests are welcome. What happens to one — response expectations, what is in
+and out of scope, and how priorities are decided — is written down in the
+[triage policy](https://github.com/Rendlio/analyzers/blob/main/TRIAGE.md). A suspected security
+problem goes to `security@rendlio.com` rather than a public issue.
+
+Two things worth knowing before you open either:
 
 - **The bans track a real codebase.** These rules exist to hold the Rendlio Sheets engine to
   its promises, so the engine's needs decide what a rule does by default. A ban that is right
