@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
@@ -294,6 +295,85 @@ public sealed partial class ShippedTextTests
         Assert.NotEqual(0, rulesChecked);
         Assert.Empty(missing);
     }
+
+    [Fact]
+    public void The_index_describes_every_rule_the_way_it_actually_ships()
+    {
+        // The index's table restates three things the descriptor already declares — a title, a
+        // category and a default severity — and a restatement nobody compares is one that drifts.
+        // Two of the three are held from the other side: the release-tracking analyzer fails the
+        // build when a category or a severity moves without a release entry, and the suppression
+        // snippets on these pages are checked against the shipped categories. The title has no
+        // guard at all, and none of the three is checked as the *cell a reader reads*. Getting one
+        // wrong is not cosmetic: a reader told a rule is a warning does not go looking for why the
+        // build failed, and one told the wrong category writes a bulk switch that silences nothing.
+        string[] rows = File.ReadAllLines(Path.Combine(RepositoryRoot, RulesIndex));
+
+        List<string> wrong = [];
+        int rulesChecked = 0;
+
+        foreach (DiagnosticDescriptor rule in ShippedRules())
+        {
+            rulesChecked++;
+
+            string? row = rows.SingleOrDefault(r => r.Contains($"[{rule.Id}](", StringComparison.Ordinal));
+
+            if (row is null)
+            {
+                // Which page the row links to is the neighbouring case's business; this one only
+                // needs the row to exist before it can read cells out of it.
+                wrong.Add($"{rule.Id}: {RulesIndex} has no table row naming it.");
+                continue;
+            }
+
+            // A Markdown row opens and closes with a pipe, so splitting leaves an empty cell at
+            // each end and the columns land 1-based. Backticks are the index's own emphasis on the
+            // category cell, not part of the value.
+            string[] cells = [.. row.Split('|').Select(cell => cell.Trim().Trim('`'))];
+
+            Compare(wrong, rule.Id, "title", cells, column: 2, rule.Title.ToString(CultureInfo.InvariantCulture));
+            Compare(wrong, rule.Id, "category", cells, column: 3, rule.Category);
+            Compare(wrong, rule.Id, "default severity", cells, column: 4, rule.DefaultSeverity.ToString());
+        }
+
+        // Guards the guard, as above: an empty pack would report green forever.
+        Assert.NotEqual(0, rulesChecked);
+        Assert.Empty(wrong);
+    }
+
+    /// <summary>
+    /// Records a mismatch when the cell at <paramref name="column"/> is not <paramref name="shipped"/>.
+    /// A row with too few cells reads as a mismatch rather than an exception, so a table someone
+    /// reshapes reports which column stopped lining up instead of an index that is out of range.
+    /// </summary>
+    private static void Compare(
+        List<string> wrong,
+        string id,
+        string what,
+        string[] cells,
+        int column,
+        string shipped)
+    {
+        string published = column < cells.Length ? cells[column] : "<no such column>";
+
+        if (!string.Equals(published, shipped, StringComparison.Ordinal))
+        {
+            wrong.Add($"{id}: {RulesIndex} gives its {what} as '{published}', but it ships as '{shipped}'.");
+        }
+    }
+
+    /// <summary>
+    /// Every rule the package ships, as the descriptor that declares it. Constructed from the
+    /// shipping assembly rather than listed here, so a rule synced in is one these cases cover
+    /// without anyone remembering to add it.
+    /// </summary>
+    private static IEnumerable<DiagnosticDescriptor> ShippedRules() =>
+        AnalyzerConventions.AnalyzersIn(Assembly.Load("Rendlio.Analyzers"))
+            // A rule that cannot be constructed is already a failure of the conventions test; there
+            // is nothing further for these to say about it.
+            .Select(static type => Activator.CreateInstance(type) as DiagnosticAnalyzer)
+            .Where(static analyzer => analyzer is not null)
+            .SelectMany(static analyzer => analyzer!.SupportedDiagnostics);
 
     /// <summary>An <c>.editorconfig</c> severity key, capturing the rule id it names.</summary>
     [GeneratedRegex(@"dotnet_diagnostic\.([^.\s]+)\.severity", RegexOptions.CultureInvariant)]
