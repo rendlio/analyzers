@@ -152,6 +152,8 @@ public sealed class AnalyzerConventionTests
     [InlineData(typeof(UnattributedAnalyzer), "missing [DiagnosticAnalyzer]")]
     [InlineData(typeof(SilentAnalyzer), "reports no diagnostics")]
     [InlineData(typeof(ForeignIdAnalyzer), "is not of the form RENDLIO000")]
+    [InlineData(typeof(NonAsciiIdAnalyzer), "is not of the form RENDLIO000")]
+    [InlineData(typeof(TrailingNewlineIdAnalyzer), "is not of the form RENDLIO000")]
     [InlineData(typeof(UndocumentedAnalyzer), "HelpLinkUri")]
     [InlineData(typeof(InternallyWordedAnalyzer), "means nothing outside")]
     [InlineData(typeof(UnconstructableAnalyzer), "public parameterless constructor")]
@@ -317,6 +319,31 @@ public sealed class AnalyzerConventionTests
     {
         public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
             [Descriptor("XY7")];
+    }
+
+    /// <summary>
+    /// Spells its number in Arabic-Indic digits (U+0669 U+0660 U+0666, i.e. 906). Escaped rather
+    /// than written out, so this file stays ASCII and the point survives a copy through a terminal
+    /// that renders neither. A consumer silences a rule by typing its id into a pragma or an
+    /// .editorconfig entry, and this one cannot be typed there: it looks like a rule id without
+    /// being usable as one, which is exactly what .NET's <c>\d</c> would have accepted.
+    /// </summary>
+    [DiagnosticAnalyzer(LanguageNames.CSharp)]
+    private sealed class NonAsciiIdAnalyzer : FixtureAnalyzer
+    {
+        public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
+            [Descriptor("RENDLIO\u0669\u0660\u0666")];
+    }
+
+    /// <summary>
+    /// Carries a trailing newline on an otherwise well-formed id. <c>$</c> matches in front of one,
+    /// so the pattern has to end at <c>\z</c> for this to be rejected.
+    /// </summary>
+    [DiagnosticAnalyzer(LanguageNames.CSharp)]
+    private sealed class TrailingNewlineIdAnalyzer : FixtureAnalyzer
+    {
+        public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
+            [Descriptor("RENDLIO907\n")];
     }
 
     [DiagnosticAnalyzer(LanguageNames.CSharp)]

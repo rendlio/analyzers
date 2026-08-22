@@ -18,8 +18,17 @@ namespace Rendlio.Analyzers.Tests;
 /// </remarks>
 internal static partial class AnalyzerConventions
 {
-    /// <summary>Family-scoped ids: RENDLIO plus exactly three digits.</summary>
-    [GeneratedRegex(@"^RENDLIO\d{3}$", RegexOptions.CultureInvariant)]
+    /// <summary>Family-scoped ids: RENDLIO plus exactly three ASCII digits.</summary>
+    /// <remarks>
+    /// <c>[0-9]</c> rather than <c>\d</c>, and <c>\z</c> rather than <c>$</c>: in .NET <c>\d</c>
+    /// matches every Unicode decimal digit and <c>$</c> also matches before a trailing newline, so
+    /// the obvious spelling of this pattern accepts strings that are unusable as the suppression
+    /// token a consumer has to type — an id whose three digits are Arabic-Indic reads as a rule id
+    /// and is not one. <see cref="RegexOptions.ECMAScript"/> would also confine <c>\d</c> to
+    /// ASCII, but naming the character set in the pattern keeps the guarantee a property of the
+    /// pattern rather than of an options flag a later edit may drop.
+    /// </remarks>
+    [GeneratedRegex(@"^RENDLIO[0-9]{3}\z", RegexOptions.CultureInvariant)]
     private static partial Regex RuleId();
 
     /// <summary>
