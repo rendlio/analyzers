@@ -1232,15 +1232,24 @@ public sealed partial class ShippedTextTests
     /// way the suppression walk is widened.
     /// </para>
     /// <para>
+    /// The intensifiers are optional and the noun takes a plural, because what is banned is a
+    /// claim rather than a form of words: "not released" and "never released" carry it exactly as
+    /// well as "not yet released" and "never been released", and the shorter forms are the more
+    /// natural way to write the sentence — so requiring the extra word would leave this matching
+    /// only the wordier half of its own subject. The plural is the same trap one level down:
+    /// <c>\b</c> does not hold between "version" and its "s", so a page saying "no released
+    /// versions" walks straight past a pattern that spells the noun singular.
+    /// </para>
+    /// <para>
     /// Every gap is <c>[ \t]+</c> for the reason <see cref="ShippedText.Unwrap"/> gives, and the
     /// direction it fails in is the bad one: this rule REJECTS a phrase, so a gap that stops
     /// matching leaves the page still saying it and the guard still green.
     /// </para>
     /// </remarks>
     [GeneratedRegex(
-        @"\b(?:no[ \t]+(?:released|published)[ \t]+(?:version|release)"
-        + @"|not[ \t]+yet[ \t]+(?:released|published)"
-        + @"|never[ \t]+been[ \t]+(?:released|published)|unreleased)\b",
+        @"\b(?:no[ \t]+(?:released|published)[ \t]+(?:version|release)s?"
+        + @"|not[ \t]+(?:yet[ \t]+)?(?:been[ \t]+)?(?:released|published)"
+        + @"|never[ \t]+(?:been[ \t]+)?(?:released|published)|unreleased)\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex UnreleasedClaim();
 
@@ -1275,9 +1284,23 @@ public sealed partial class ShippedTextTests
     [Theory]
     // The sentence that shipped on the triage policy, and the one this rule exists for.
     [InlineData("Today the pack has no released version, so a report cannot be fixed yet.")]
-    // The rewordings that mean the same thing, so getting past the rule takes more than a synonym.
+    // One row per word the row above leaves unpinned. With only that row, "published", "release"
+    // and the plural could each be dropped from the first branch and every test here stays green —
+    // which is the failure this file already worries about one aggregate level up.
+    [InlineData("There is no published release.")]
+    [InlineData("The pack has no released versions.")]
+    [InlineData("There are no published releases.")]
+    // The same claim without the intensifier: shorter, more natural, and what a pattern requiring
+    // "yet" or "been" lets through while still looking like it covers the claim.
+    [InlineData("Rendlio.Analyzers is not released.")]
+    [InlineData("The pack has not been released.")]
+    [InlineData("This has not been published.")]
+    [InlineData("The pack was never released.")]
+    // And with it, both verbs on both branches.
     [InlineData("The pack is not yet published.")]
+    [InlineData("The pack is not yet released.")]
     [InlineData("It has never been released.")]
+    [InlineData("It has never been published.")]
     [InlineData("This is an unreleased package.")]
     // Hard-wrapped where these pages wrap. Two trailing spaces are a Markdown hard break that
     // .editorconfig preserves on purpose, so the gap reaches the matcher as three spaces.
@@ -1296,7 +1319,13 @@ public sealed partial class ShippedTextTests
     [InlineData("keep the detail off any public thread until there is a release to upgrade to")]
     [InlineData("A confirmed bug enters the queue and ships in the next release.")]
     [InlineData("It applies from the first published release onward.")]
-    public void Guard_leaves_a_page_alone_for_naming_the_release_a_fix_arrives_in(string page)
+    // The two shipped sentences sitting closest to the pattern, quoted from the pages rather than
+    // invented, because dropping the intensifiers widened what "closest" means: the security
+    // policy is one word off the "never" branch, and the README already puts "not" and "published"
+    // in one sentence. Both are true, both must stay green.
+    [InlineData("A published version can be unlisted but never replaced.")]
+    [InlineData("The next rule published here may therefore not be the next number.")]
+    public void Guard_leaves_alone_a_page_that_is_not_making_the_claim(string page)
     {
         Assert.DoesNotMatch(UnreleasedClaim(), ShippedText.Unwrap(page));
     }
