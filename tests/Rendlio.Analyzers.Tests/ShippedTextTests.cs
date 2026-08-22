@@ -15,8 +15,6 @@ namespace Rendlio.Analyzers.Tests;
 /// </summary>
 public sealed partial class ShippedTextTests
 {
-    private const string SolutionFile = "Rendlio.Analyzers.slnx";
-
     /// <summary>
     /// Directory segments that are not published: the private notes tree, build output, and the
     /// repository's own plumbing. Anything else carrying a page is fair game for the rules.
@@ -24,15 +22,10 @@ public sealed partial class ShippedTextTests
     private static readonly string[] _unpublishedDirectories = ["docs/internal", ".git", ".conductor", "bin", "obj", "artifacts"];
 
     /// <summary>
-    /// The repository root, walked up from the test binary.
+    /// The repository root, resolved by <see cref="RepositoryLayout"/> — which the workflow rules
+    /// share, so the walk and the reason for doing it that way live in one place.
     /// </summary>
-    /// <remarks>
-    /// Found by walking rather than taken from a compile-time <c>[CallerFilePath]</c>, because CI
-    /// builds with <c>ContinuousIntegrationBuild</c> — which normalises embedded source paths to a
-    /// form that does not exist on any disk. A compile-time path would resolve to nothing precisely
-    /// in the run where these rules matter most.
-    /// </remarks>
-    private static string RepositoryRoot { get; } = FindRepositoryRoot();
+    private static string RepositoryRoot => RepositoryLayout.Root;
 
     [Fact]
     public void Every_published_page_meets_the_publishing_rules()
@@ -876,20 +869,4 @@ public sealed partial class ShippedTextTests
 
     /// <summary>Separators folded to '/', so one spelling of a path works on either OS.</summary>
     private static string Normalise(string path) => path.Replace('\\', '/');
-
-    private static string FindRepositoryRoot()
-    {
-        for (DirectoryInfo? directory = new(AppContext.BaseDirectory);
-             directory is not null;
-             directory = directory.Parent)
-        {
-            if (File.Exists(Path.Combine(directory.FullName, SolutionFile)))
-            {
-                return directory.FullName;
-            }
-        }
-
-        throw new InvalidOperationException(
-            $"Could not find {SolutionFile} in any directory above {AppContext.BaseDirectory}.");
-    }
 }

@@ -1,0 +1,31 @@
+# dependabot.yml — keeps the commit-SHA pins in .github/workflows moving.
+#
+# Pinning an action to a SHA closes the hole a moving tag leaves and opens a smaller one in its
+# place: a pinned action never picks up its own security fixes. A major tag like `@v4` collects
+# them silently, which is convenient right up to the moment "silently" is the problem. This file
+# is the other half of that trade — the fixes still arrive, as pull requests that say which
+# version they move to, so the repository gets the update AND a diff someone reads.
+#
+# Dependabot understands the `uses: owner/repo@<sha> # v1.2.3` shape and rewrites both halves, so
+# the trailing comment keeps telling the truth instead of decaying into a claim about a version
+# that is no longer there.
+#
+# Only `github-actions` is enabled. NuGet is deliberately left out: the Microsoft.CodeAnalysis
+# pin in Directory.Packages.props IS the compiler floor this package supports, and that file
+# calls raising it a consumer-visible breaking change. An automated pull request bumping it would
+# be proposing a breaking change as routine maintenance.
+
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # One pull request for a week that touches three actions, rather than three.
+    groups:
+      actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: ci

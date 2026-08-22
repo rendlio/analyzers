@@ -10,6 +10,14 @@
 #
 # This workflow needs NO secrets. Keep it that way: releasing is a separate workflow with
 # its own narrow permissions.
+#
+# Every `uses:` below is pinned to a commit SHA, with the tag it resolved to in the trailing
+# comment. A tag is a pointer its owner can move; a SHA is the code that was actually reviewed.
+# The exposure in THIS file is small — no secrets, a read-only token, nothing published — but the
+# convention is repository-wide and release.yml is where it carries weight, so it is cheaper to
+# hold everywhere than to remember where it matters. A test in tests/Rendlio.Analyzers.Tests
+# fails the build if a workflow reintroduces a moving tag, and Dependabot moves the pins
+# deliberately, in a pull request someone reads.
 
 name: ci
 
@@ -42,10 +50,10 @@ jobs:
         os: [ubuntu-latest, windows-latest]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # The SDK version is pinned by global.json at the repository root.
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           global-json-file: global.json
 
@@ -82,7 +90,7 @@ jobs:
 
       - name: Upload package
         if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: nupkg
           path: ./artifacts/*.nupkg

@@ -11,6 +11,13 @@
 # `secrets` must never appear in this file, and a step that would print the temporary key is a
 # defect. See https://learn.microsoft.com/nuget/nuget-org/trusted-publishing.
 #
+# Every `uses:` below is pinned to a commit SHA, with the tag it resolved to in the trailing
+# comment. This is the file where that matters: a step here runs in a job that can mint a key
+# authorised to publish under this package's own name, and a moving tag means the code holding
+# that key can change with no diff in this repository and no release of its own. `NuGet/login`
+# is the sharpest case — it is the step the short-lived key is handed to. Move a pin the way
+# Dependabot does, in a pull request someone reads; never widen one back to a tag.
+#
 # A release is a decision, not a consequence. The only thing that publishes is a human pushing
 # a version tag; a branch push, a merge or a schedule must never reach the push step.
 #
@@ -62,9 +69,9 @@ jobs:
         os: [ubuntu-latest, windows-latest]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           global-json-file: global.json
 
@@ -98,9 +105,9 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           global-json-file: global.json
 
@@ -189,7 +196,7 @@ jobs:
       # Uploaded before the push so a dry run leaves the exact artifact a real release would have
       # published, for inspection.
       - name: Upload package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: nupkg
           path: ./artifacts/*.nupkg
@@ -217,7 +224,7 @@ jobs:
       - name: Exchange the OIDC token for a short-lived nuget.org key
         id: login
         if: github.event_name == 'push'
-        uses: NuGet/login@v1
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
         with:
           user: ${{ vars.NUGET_USER }}
 
