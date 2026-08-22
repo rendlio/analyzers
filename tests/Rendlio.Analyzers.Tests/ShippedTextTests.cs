@@ -593,11 +593,17 @@ public sealed partial class ShippedTextTests
     /// One use of every row of RENDLIO001's table, and nothing else the rule reports.
     /// </summary>
     /// <remarks>
-    /// Exactly one diagnostic per row is what makes the count below a guard rather than arithmetic.
-    /// The three <c>Assembly</c> overloads share a row and are called once between them; members
-    /// reached through a banned type stay silent on purpose, because the type reference carries
-    /// their diagnostic. So a row added to the page with no use added here fails on the count
-    /// before it can fail on a reason, and says which of the two went missing.
+    /// <para>Exactly one diagnostic per row is what makes the count below a guard rather than
+    /// arithmetic. The three <c>Assembly</c> overloads share a row and are called once between
+    /// them; members reached through a banned type stay silent on purpose, because the type
+    /// reference carries their diagnostic. So a row added to the page with no use added here fails
+    /// on the count before it can fail on a reason, and says which of the two went missing.</para>
+    /// <para>The uses are written in the table's own order, and must stay that way. The comparison
+    /// is positional — that is what makes a reason quoted against the wrong row a failure rather
+    /// than a permutation nothing looks at — so this order is a contract, not a tidiness. A row
+    /// moved on the page moves here in the same edit; getting it wrong fails loudly at that
+    /// position rather than passing quietly, which is the safe direction for a contract held by a
+    /// convention.</para>
     /// </remarks>
     private const string EveryRowOfTheTable = """
         using System.Runtime.InteropServices;
@@ -638,8 +644,12 @@ public sealed partial class ShippedTextTests
         string[][] rows = RowsOfTheBannedApiTable();
         string[] reasons = await ReasonsRendlio001Gives(EveryRowOfTheTable);
 
-        // Guards the guard: a heading rename, a reshaped table or a fixture that stopped tripping a
-        // row would leave reasons nobody compared, and the walk below would pass over them green.
+        // Guards the guard: a heading rename or a reshaped table would leave reasons nobody
+        // compared, and the walk below would pass over them green. The count is now redundant with
+        // that walk — a fixture that stopped tripping a row leaves an unpaired position, which the
+        // walk reports — but it is kept because it names the arithmetic directly. The walk would
+        // instead report from wherever the two parted company onward, every row after it held
+        // against its neighbour's reason, which describes a missing use far less plainly.
         Assert.NotEmpty(rows);
         Assert.Equal(rows.Length, reasons.Length);
 
@@ -672,6 +682,38 @@ public sealed partial class ShippedTextTests
         }
     }
 
+    [Fact]
+    public async Task A_reason_quoted_against_another_row_does_not_count_as_this_row_quoting_it()
+    {
+        // Comparing the two as SETS certifies a permutation. Exchange the reasons on the `Process`
+        // and `System.Net.*` rows and every cell is still word for word a reason the rule gives,
+        // every reason is still quoted by some cell, and the multiset is unchanged — so both walks
+        // and the row count stayed green while the page told a reader that spawning a process is
+        // banned for zero phone-home. Exactness cannot see this: each cell is a perfect quotation
+        // of the wrong row. Only position can, which is why the walk pairs the page's Nth row with
+        // the rule's Nth diagnostic instead of asking whether each appears somewhere in the other.
+        // This exchanges every pair of rows a swap would actually move and insists it is reported.
+        string[][] rows = RowsOfTheBannedApiTable();
+        string[] reasons = await ReasonsRendlio001Gives(EveryRowOfTheTable);
+
+        // As above: cutting or moving a cell proves something only if the page is intact first —
+        // and this is also what earns the swap its cell, since a row too short to carry a reason
+        // could not have matched one here.
+        Assert.NotEmpty(rows);
+        Assert.Empty(ReasonMismatches(rows, reasons));
+
+        List<(int Left, int Right)> pairs = RowPairsQuotingDifferentReasons(rows);
+
+        // Guards the guard: rows that all quoted one reason would make every exchange a no-op and
+        // leave the loop below asserting nothing at all.
+        Assert.NotEmpty(pairs);
+
+        foreach ((int left, int right) in pairs)
+        {
+            Assert.NotEmpty(ReasonMismatches(WithReasonsExchanged(rows, left, right), reasons));
+        }
+    }
+
     /// <summary>The rows of RENDLIO001's table, as the page on disk carries them.</summary>
     private static string[][] RowsOfTheBannedApiTable() =>
     [
@@ -701,37 +743,87 @@ public sealed partial class ShippedTextTests
     }
 
     /// <summary>
-    /// Everything the page's reason column and the reasons the rule gives disagree about, walked in
-    /// both directions so that neither a cell nothing prints nor a reason no cell quotes can hide.
+    /// Every pair of rows an exchange would actually move. Three rows quote <c>no dynamic code</c>
+    /// and two quote the type-name reason, and swapping two of those leaves the page identical —
+    /// so pairing them would assert that an edit which changed nothing is caught, which no walk
+    /// can do and none should.
+    /// </summary>
+    private static List<(int Left, int Right)> RowPairsQuotingDifferentReasons(string[][] rows)
+    {
+        List<(int Left, int Right)> pairs = [];
+
+        foreach (int left in Enumerable.Range(0, rows.Length))
+        {
+            foreach (int right in Enumerable.Range(left + 1, rows.Length - left - 1))
+            {
+                if (!string.Equals(Reason(rows[left]), Reason(rows[right]), StringComparison.Ordinal))
+                {
+                    pairs.Add((left, right));
+                }
+            }
+        }
+
+        return pairs;
+    }
+
+    /// <summary>
+    /// The table with two rows' reasons exchanged — the shape of a reason quoted against the wrong
+    /// api. The rows are copied before the swap so the caller keeps the page as the disk holds it
+    /// and can go on exchanging further pairs against it.
+    /// </summary>
+    private static string[][] WithReasonsExchanged(string[][] rows, int left, int right)
+    {
+        string[][] exchanged = [.. rows.Select(static cells => cells.ToArray())];
+
+        (exchanged[left][1], exchanged[right][1]) = (exchanged[right][1], exchanged[left][1]);
+
+        return exchanged;
+    }
+
+    /// <summary>
+    /// Everything the page's reason column and the reasons the rule gives disagree about, pairing
+    /// the table's Nth row with the rule's Nth diagnostic so that a cell nothing prints, a reason
+    /// no cell quotes, and a reason quoted against the wrong row are all one kind of failure.
     /// </summary>
     /// <remarks>
-    /// The comparison is exact, and that is the load-bearing part of it. Containment reads a cell
+    /// <para>Two things are load-bearing. The comparison is <em>exact</em>: containment reads a cell
     /// holding only the front of a reason as a match BOTH ways round and leaves the row count
-    /// untouched, so it certifies precisely the half-quotation this column must not carry. Pinned
-    /// by <see cref="A_row_that_quotes_only_the_front_of_its_reason_does_not_count_as_quoting_it"/>.
+    /// untouched, so it certifies precisely the half-quotation this column must not carry. And it
+    /// is <em>positional</em>: comparing the two as sets certifies a permutation, where every cell
+    /// quotes some reason perfectly and no cell quotes its own. Exactness cannot see that one and
+    /// position cannot see the other, so the column needs both. Pinned by
+    /// <see cref="A_row_that_quotes_only_the_front_of_its_reason_does_not_count_as_quoting_it"/> and
+    /// <see cref="A_reason_quoted_against_another_row_does_not_count_as_this_row_quoting_it"/>.</para>
+    /// <para>Position means the table's order and the fixture's order are one contract; see the
+    /// remark on <see cref="EveryRowOfTheTable"/>. Walking to the longer of the two rather than to
+    /// the shorter keeps a page and a fixture that have drifted apart in length reportable here
+    /// instead of silently comparing only the overlap.</para>
     /// </remarks>
     private static List<string> ReasonMismatches(string[][] rows, string[] reasons)
     {
         List<string> wrong = [];
 
-        foreach (string[] cells in rows)
+        foreach (int at in Enumerable.Range(0, Math.Max(rows.Length, reasons.Length)))
         {
-            string reason = Reason(cells);
+            bool onThePage = at < rows.Length;
+            bool fromTheRule = at < reasons.Length;
 
-            if (!reasons.Any(given => string.Equals(given, reason, StringComparison.Ordinal)))
+            if (onThePage && fromTheRule
+                && string.Equals(Reason(rows[at]), reasons[at], StringComparison.Ordinal))
             {
-                wrong.Add(
-                    $"{BannedApiPage}: the row for {Banned(cells)} gives its reason as '{reason}', "
-                    + "but that is not, word for word, what the rule says about it.");
+                continue;
             }
-        }
 
-        foreach (string given in reasons)
-        {
-            if (!rows.Any(cells => string.Equals(Reason(cells), given, StringComparison.Ordinal)))
+            wrong.Add((onThePage, fromTheRule) switch
             {
-                wrong.Add($"RENDLIO001 says '{given}', but no row on {BannedApiPage} quotes that.");
-            }
+                (true, true) =>
+                    $"{BannedApiPage} row {at + 1}, for {Banned(rows[at])}, gives its reason as "
+                    + $"'{Reason(rows[at])}', but what the rule says there is '{reasons[at]}'.",
+                (true, false) =>
+                    $"{BannedApiPage} row {at + 1}, for {Banned(rows[at])}, gives its reason as "
+                    + $"'{Reason(rows[at])}', but the rule reports nothing at that row.",
+                _ => $"RENDLIO001 says '{reasons[at]}', but {BannedApiPage} has no row {at + 1}.",
+            });
         }
 
         return wrong;
@@ -739,12 +831,17 @@ public sealed partial class ShippedTextTests
 
     /// <summary>The reason half of every RENDLIO001 diagnostic <paramref name="source"/> trips.</summary>
     /// <remarks>
-    /// The reason is argument 1 of the rule's message format, so it is whatever follows the text
-    /// that format puts between its two arguments. That text is read off the descriptor the rule
-    /// reports with rather than spelled out here, so rewording the message carries this with it
-    /// instead of leaving it splitting on punctuation the rule no longer prints. RENDLIO002 wraps
-    /// its reason into the sentence rather than appending it, which is why the split is keyed to
-    /// one descriptor — and why the single-descriptor assertion below is not decoration.
+    /// <para>The reason is argument 1 of the rule's message format, so it is whatever follows the
+    /// text that format puts between its two arguments. That text is read off the descriptor the
+    /// rule reports with rather than spelled out here, so rewording the message carries this with
+    /// it instead of leaving it splitting on punctuation the rule no longer prints. RENDLIO002
+    /// wraps its reason into the sentence rather than appending it, which is why the split is keyed
+    /// to one descriptor — and why the single-descriptor assertion below is not decoration.</para>
+    /// <para>Ordered by where in the source each one landed, because the caller compares by
+    /// position and the order a compilation hands its diagnostics back in is not part of any
+    /// contract. Sorting here rather than trusting that order is what lets the fixture's own
+    /// layout — one use per row, in the table's order — decide which reason is held against which
+    /// row.</para>
     /// </remarks>
     private static async Task<string[]> ReasonsRendlio001Gives(string source)
     {
@@ -753,7 +850,12 @@ public sealed partial class ShippedTextTests
 
         ImmutableArray<Diagnostic> reported = await AnalyzerHarness.RunAsync(analyzer, "Consumer", source);
 
-        return [.. reported.Select(d => ReasonIn(d.GetMessage(CultureInfo.InvariantCulture), separator))];
+        return
+        [
+            .. reported
+                .OrderBy(static d => d.Location.SourceSpan.Start)
+                .Select(d => ReasonIn(d.GetMessage(CultureInfo.InvariantCulture), separator)),
+        ];
     }
 
     /// <summary>
