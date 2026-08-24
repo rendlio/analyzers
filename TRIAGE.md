@@ -12,18 +12,22 @@ answered, but not yet fixed in a version you can install.
 
 - **A false positive, a missed violation, a crash, a packaging or documentation defect:**
   [GitHub issues](https://github.com/Rendlio/analyzers/issues) on this repository.
-- **A suspected security problem:** email `security@rendlio.com`. Please do not open a
-  public issue for it, and please give us a chance to publish a fixed release first. We do
-  not run a paid bounty programme; we will credit you in the release notes unless you
-  would rather we did not.
+- **A suspected security problem:** report it privately with **Report a vulnerability** on
+  this repository's [Security tab](https://github.com/Rendlio/analyzers/security), which
+  opens a thread only you and the maintainers can read. If that is not available to you,
+  open an ordinary issue saying only that you have a security report and how to reach
+  you — we will take the detail off the public thread rather than leave you without a
+  route. What we ask in return is a chance to publish a fixed release before you write it
+  up. We do not run a paid bounty programme; we will credit you in the release notes
+  unless you would rather we did not.
 - **A rule you would like to see, or a ban you need to bend:** GitHub issues, after
   reading "How priorities get decided" below.
 
 Issues are public on purpose — the answer to "why does `RENDLIO001` fire here?" is almost
-always useful to more than one reader. There is no private support channel for this
-package and no paid support tier. If you need a guaranteed response time, this is not a
-package that can give you one, and we would rather say so than let you find out during an
-incident.
+always useful to more than one reader. Apart from the security route above there is no
+private channel for this package and no paid support tier. If you need a guaranteed
+response time, this is not a package that can give you one, and we would rather say so
+than let you find out during an incident.
 
 ## Response expectations
 
@@ -86,8 +90,8 @@ description.
   chosen to keep it loadable from Visual Studio 2022 17.8 and .NET SDK 8.0.100 onward.
   Older hosts are not supported, and raising that floor would itself be a breaking change.
 - **Languages other than C#.** The package installs a C# analyzer and nothing else.
-- **Other Rendlio software.** Questions about the products these rules are used on belong
-  with those products, not here.
+- **The engine these rules are developed against.** A question about Rendlio Sheets itself
+  belongs with that product, not with this rule pack.
 - **General .NET, Roslyn or build help**, review of your codebase, and rule authoring on
   request.
 - **Forks.** Apache-2.0 means you can fork, vendor and modify this freely, and we would

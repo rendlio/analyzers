@@ -67,8 +67,8 @@ and `netstandard2.0` is the only target both can load.
 
 Issues and pull requests are welcome. What happens to one — response expectations, what is in
 and out of scope, and how priorities are decided — is written down in the
-[triage policy](https://github.com/Rendlio/analyzers/blob/main/TRIAGE.md). A suspected security
-problem goes to `security@rendlio.com` rather than a public issue.
+[triage policy](https://github.com/Rendlio/analyzers/blob/main/TRIAGE.md), which also gives the
+private route for reporting a suspected security problem.
 
 Two things worth knowing before you open either:
 
