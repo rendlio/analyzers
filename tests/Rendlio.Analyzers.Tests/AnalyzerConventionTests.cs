@@ -95,6 +95,49 @@ public sealed class AnalyzerConventionTests
     }
 
     [Fact]
+    public void Every_shipped_rule_is_named_by_an_analyzer_release_file()
+    {
+        // Release tracking is what makes adding or retiring a rule a reviewable diff, and the
+        // project file no longer lists the two files itself — it leans on
+        // Microsoft.CodeAnalysis.Analyzers to include them. That include is conditional on the
+        // file existing, so a deleted AnalyzerReleases.Shipped.md is no longer an error: it is
+        // simply not included, the header-only unshipped file is enough for the release-tracking
+        // analyzer to consider tracking switched on, and RS2000 never fires. Both shipped ids then
+        // report from an assembly that declares them nowhere, on a build with no warnings. The
+        // explicit <AdditionalFiles> group used to catch that by accident, because the compiler
+        // errors on a listed file it cannot find; this catches it on purpose.
+        //
+        // A presence check rather than a re-implementation of RS2000: the analyzer still owns what
+        // a well-formed release table means. What is pinned here is only that a rule this assembly
+        // reports is named somewhere in the files that exist to name it.
+        List<string> untracked = UntrackedRules(ShippedRuleIds(), ReleaseTrackingText());
+
+        Assert.True(
+            untracked.Count == 0,
+            $"{string.Join(", ", untracked)} report from this assembly but appear in no AnalyzerReleases file under {ReleaseTrackingDirectory}. Adding or retiring a rule is meant to be a reviewable diff in one of those files.");
+    }
+
+    [Fact]
+    public void The_rules_checked_against_the_release_files_are_the_ones_the_pack_reports()
+    {
+        // Guards the guard. A rule about tracked ids passes over an empty id set, which is also
+        // what an assembly that stopped carrying analyzers returns.
+        Assert.NotEmpty(ShippedRuleIds());
+    }
+
+    [Fact]
+    public void The_release_files_without_their_shipped_half_leave_every_rule_untracked()
+    {
+        // The failure the check above exists for, driven rather than assumed: reading the
+        // unshipped file alone is exactly the state a deleted AnalyzerReleases.Shipped.md leaves
+        // the compiler in, and it is the state that currently builds green.
+        string unshippedOnly = File.ReadAllText(
+            Path.Combine(ReleaseTrackingDirectory, "AnalyzerReleases.Unshipped.md"));
+
+        Assert.Equal(ShippedRuleIds(), UntrackedRules(ShippedRuleIds(), unshippedOnly));
+    }
+
+    [Fact]
     public void Guard_accepts_a_compliant_analyzer()
     {
         Assert.Empty(AnalyzerConventions.Inspect([typeof(CompliantAnalyzer)]));
@@ -155,6 +198,46 @@ public sealed class AnalyzerConventionTests
             CultureInfo.CurrentUICulture = previousUiCulture;
         }
     }
+
+    /// <summary>The directory holding the project's release-tracking files.</summary>
+    private static string ReleaseTrackingDirectory =>
+        Path.Combine(RepositoryLayout.Root, "src", "Rendlio.Analyzers");
+
+    /// <summary>
+    /// Every rule id the shipping assembly reports, deduplicated and in a stable order.
+    /// </summary>
+    private static List<string> ShippedRuleIds() =>
+        AnalyzerConventions.AnalyzersIn(ShippingAssembly)
+            .Select(Activator.CreateInstance)
+            .OfType<DiagnosticAnalyzer>()
+            .SelectMany(analyzer => analyzer.SupportedDiagnostics)
+            .Select(descriptor => descriptor.Id)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToList();
+
+    /// <summary>
+    /// Every release-tracking file the project directory holds, concatenated.
+    /// </summary>
+    /// <remarks>
+    /// Enumerated rather than named, so a file that stops existing contributes nothing instead of
+    /// throwing — the point of the check is to notice that absence as untracked rules, and a check
+    /// that died on the missing file would report the same red for a broken test as for the defect.
+    /// </remarks>
+    private static string ReleaseTrackingText() =>
+        string.Concat(
+            Directory.EnumerateFiles(ReleaseTrackingDirectory, "AnalyzerReleases.*.md")
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .Select(File.ReadAllText));
+
+    /// <summary>
+    /// Returns the ids in <paramref name="ruleIds"/> that <paramref name="releaseText"/> does not
+    /// name, in the order they were given.
+    /// </summary>
+    private static List<string> UntrackedRules(
+        IEnumerable<string> ruleIds,
+        string releaseText) =>
+        ruleIds.Where(id => !releaseText.Contains(id, StringComparison.Ordinal)).ToList();
 
     /// <summary>
     /// The compiler version this pack is pinned to build against, read from the one file that
