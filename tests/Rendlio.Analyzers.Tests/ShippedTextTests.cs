@@ -533,6 +533,65 @@ public sealed partial class ShippedTextTests
             @"<PackageReference Include=""Rendlio.Analyzers.Extras"" Version=""9.9.9"" />");
     }
 
+    // ------------------------------------- the compiler-host floor, and the pin it is read from
+
+    /// <summary>The Roslyn version this package compiles against, read back from the one file that
+    /// pins it.</summary>
+    /// <remarks>
+    /// Read rather than repeated, for the reason <see cref="RepositoryUrl"/> is: the host floor the
+    /// README states is a consequence of this pin, so reading it is what stops the two parting
+    /// company when the pin moves.
+    /// </remarks>
+    private static string PinnedRoslynVersion =>
+        XDocument.Load(Path.Combine(RepositoryRoot, "Directory.Packages.props"))
+            .Descendants("PackageVersion")
+            .Single(element => (string?)element.Attribute("Include") == "Microsoft.CodeAnalysis.CSharp")
+            .Attribute("Version")!.Value.Trim();
+
+    /// <summary>The Roslyn version the README names as the floor, as major.minor.</summary>
+    [GeneratedRegex(@"builds against Roslyn ([0-9]+\.[0-9]+)", RegexOptions.CultureInvariant)]
+    private static partial Regex StatedRoslynVersion();
+
+    [Fact]
+    public void The_readme_states_the_roslyn_version_this_package_is_actually_built_against()
+    {
+        // The README is the PackageReadmeFile, so this sentence is what nuget.org shows a consumer
+        // deciding whether their compiler host can load the package at all — and getting it wrong
+        // is not a typo, it is telling someone on VS 17.8 that a package which will not load there
+        // will. The number is a consequence of the Microsoft.CodeAnalysis.CSharp pin, which
+        // Directory.Packages.props itself calls a consumer-visible breaking change to raise; left
+        // uncoupled, raising it drops every host below the new floor while the listing page goes on
+        // promising the old one, and nothing goes red.
+        string readme = File.ReadAllText(Path.Combine(RepositoryRoot, "README.md"));
+        string pinned = PinnedRoslynVersion;
+        string floor = string.Join('.', pinned.Split('.').Take(2));
+
+        Match stated = StatedRoslynVersion().Match(readme);
+
+        // Guards the guard: a README that stopped carrying the sentence, or a pattern that stopped
+        // matching it, would have nothing to disagree with and would report green forever.
+        Assert.True(stated.Success, "README.md no longer states the Roslyn version it builds against.");
+        Assert.Equal(floor, stated.Groups[1].Value);
+
+        // The Visual Studio and SDK floors in the same sentence follow from the Roslyn version but
+        // are not derivable from anything in this repository, so they cannot be checked here. This
+        // assertion is what forces someone bumping the pin to reach that sentence and revisit them.
+    }
+
+    [Theory]
+    // The shape the README actually ships.
+    [InlineData("this package builds against Roslyn 4.8, so it needs", "4.8")]
+    // A hard wrap can land between the words, and the pages here are wrapped at column ~90.
+    [InlineData("builds against Roslyn 10.11 and upwards", "10.11")]
+    public void The_roslyn_floor_pattern_reads_the_version_the_sentence_states(
+        string sentence, string expected)
+    {
+        Match match = StatedRoslynVersion().Match(sentence);
+
+        Assert.True(match.Success);
+        Assert.Equal(expected, match.Groups[1].Value);
+    }
+
     /// <summary>
     /// Stand-in repository. Deliberately not the live URL: a fixture only needs some repository to
     /// resolve against, and pinning the real one here would couple these cases to a value the
