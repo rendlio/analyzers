@@ -1,8 +1,12 @@
+using System.Xml.Linq;
+
 namespace Rendlio.Analyzers.Tests;
 
 /// <summary>
 /// Holds every page this repository publishes to <see cref="ShippedText"/>, and holds
-/// <see cref="ShippedText"/> itself to fixtures that break each rule on purpose.
+/// <see cref="ShippedText"/> itself to fixtures that break each rule on purpose. The links those
+/// pages make into this repository are resolved with <see cref="PageLinks"/> and checked against
+/// the files on disk, so a rename cannot quietly leave a page pointing at nothing.
 /// </summary>
 public sealed class ShippedTextTests
 {
@@ -106,6 +110,141 @@ public sealed class ShippedTextTests
         IReadOnlyList<string> violations = ShippedText.Inspect("fixture.md", page);
 
         Assert.Contains(violations, v => v.Contains(expected, StringComparison.Ordinal));
+    }
+
+    // ------------------------------------------- the triage policy, and the links that reach it
+
+    /// <summary>The published triage policy, at the repository root.</summary>
+    private const string TriagePolicy = "TRIAGE.md";
+
+    /// <summary>
+    /// This repository's URL, read back from the one file that declares it.
+    /// </summary>
+    /// <remarks>
+    /// The package metadata takes the same value from the same place, so reading it rather than
+    /// repeating it is what keeps the absolute links on the packed README checked against the
+    /// repository they are meant to point at — and keeps this test right if the URL ever changes.
+    /// </remarks>
+    private static string RepositoryUrl =>
+        XDocument.Load(Path.Combine(RepositoryRoot, "Directory.Build.props"))
+            .Descendants("RepositoryUrl").Single().Value.Trim();
+
+    [Fact]
+    public void The_triage_policy_is_published_at_the_repository_root()
+    {
+        // Shipping a free package with no stated support posture is the one promise this
+        // repository exists not to make, so the policy being published is a precondition of
+        // shipping rather than a nicety. Pinned by path and not by prose: a rename is what would
+        // drop the page out of the published set without any page looking wrong.
+        Assert.True(File.Exists(Path.Combine(RepositoryRoot, TriagePolicy)));
+        Assert.Contains(PublishedPages(), p => Path.GetFileName(p) == TriagePolicy);
+    }
+
+    [Fact]
+    public void The_readme_links_to_the_triage_policy()
+    {
+        // The README is the only page a consumer is guaranteed to see — it is what nuget.org
+        // renders — so the policy is reachable only through a link from it. Asserted through the
+        // resolver rather than by searching for a literal, so it holds for either spelling of the
+        // link and fails if the README ever points at a different repository.
+        IReadOnlyList<string> targets = PageLinks.RepositoryTargets(
+            "README.md",
+            File.ReadAllText(Path.Combine(RepositoryRoot, "README.md")),
+            RepositoryUrl);
+
+        Assert.Contains(TriagePolicy, targets);
+    }
+
+    [Fact]
+    public void Every_link_from_a_published_page_into_this_repository_resolves()
+    {
+        List<string> broken = [];
+        int linksChecked = 0;
+
+        foreach (string page in PublishedPages())
+        {
+            string relativePage = Normalise(Path.GetRelativePath(RepositoryRoot, page));
+
+            foreach (string target in
+                     PageLinks.RepositoryTargets(relativePage, File.ReadAllText(page), RepositoryUrl))
+            {
+                linksChecked++;
+                string resolved = Path.Combine(RepositoryRoot, target);
+
+                if (!File.Exists(resolved) && !Directory.Exists(resolved))
+                {
+                    broken.Add($"{relativePage}: links to '{target}', which is not in this repository.");
+                }
+            }
+        }
+
+        // Guards the guard, for the reason the walk above is guarded: a resolver that quietly
+        // stopped matching would leave nothing to check and report green forever.
+        Assert.NotEqual(0, linksChecked);
+        Assert.Empty(broken);
+    }
+
+    /// <summary>
+    /// Stand-in repository. Deliberately not the live URL: a fixture only needs some repository to
+    /// resolve against, and pinning the real one here would couple these cases to a value the
+    /// resolver is supposed to read from the build props. `.invalid` is reserved by RFC 2606.
+    /// </summary>
+    private const string FixtureRepositoryUrl = "https://example.invalid/owner/repo";
+
+    [Theory]
+    // A page beside the one linking to it, written relatively — how a page that never ships inside
+    // the package can write it.
+    [InlineData("README.md", "see the [policy](TRIAGE.md).", "TRIAGE.md")]
+    // The same file as the absolute URL a page inside the package has to use, because a relative
+    // link does not resolve on nuget.org.
+    [InlineData("README.md", "see the [policy](https://example.invalid/owner/repo/blob/main/TRIAGE.md).", "TRIAGE.md")]
+    // An anchor names a place inside a file, not a different file.
+    [InlineData("README.md", "see [what is in scope](TRIAGE.md#in-scope).", "TRIAGE.md")]
+    // A link label may straddle the ~90-column wrap these pages are written to.
+    [InlineData("README.md", "see the [triage\npolicy](TRIAGE.md).", "TRIAGE.md")]
+    // A relative link resolves against the directory holding the page, not the repository root.
+    [InlineData("docs/public/guide.md", "a [sibling](other.md).", "docs/public/other.md")]
+    [InlineData("docs/public/guide.md", "the [policy](../../TRIAGE.md).", "TRIAGE.md")]
+    public void A_link_into_this_repository_resolves_to_the_file_it_names(
+        string page,
+        string markdown,
+        string expected)
+    {
+        Assert.Equal(
+            expected,
+            Assert.Single(PageLinks.RepositoryTargets(page, markdown, FixtureRepositoryUrl)));
+    }
+
+    [Theory]
+    // A page of the repository rather than a file in it: no such path exists on disk, and
+    // reporting one would fail the build over a link that works.
+    [InlineData("[issues](https://example.invalid/owner/repo/issues)")]
+    // Someone else's site.
+    [InlineData("[the licence text](https://www.apache.org/licenses/LICENSE-2.0)")]
+    // An anchor on this page.
+    [InlineData("[what is in scope](#in-scope)")]
+    // An address, not a path. Live rather than theoretical: a private reporting route is exactly
+    // the kind of link a policy page carries.
+    [InlineData("[write to us](mailto:someone@example.invalid)")]
+    // Not a link at all — a bracketed phrase that happens to precede a parenthesis.
+    [InlineData("suppress it [as documented] (severity, NoWarn, pragma).")]
+    public void A_link_that_names_no_file_in_this_repository_is_left_alone(string markdown)
+    {
+        Assert.Empty(PageLinks.RepositoryTargets("README.md", markdown, FixtureRepositoryUrl));
+    }
+
+    [Fact]
+    public void A_link_to_a_file_that_is_not_here_is_visible_to_the_check()
+    {
+        // The check above is an existence test over whatever the resolver returns, so proving it
+        // bites means proving a bad target survives resolution and then fails to resolve on disk.
+        // Without this, a resolver that silently dropped broken links would still report green.
+        // The name is one no page here could plausibly acquire, so a file someone legitimately
+        // adds later cannot turn this fixture red for the wrong reason.
+        string target = Assert.Single(
+            PageLinks.RepositoryTargets("README.md", "read the [policy](no-such-page.invalid.md).", RepositoryUrl));
+
+        Assert.False(File.Exists(Path.Combine(RepositoryRoot, target)));
     }
 
     private static IEnumerable<string> PublishedPages() =>
