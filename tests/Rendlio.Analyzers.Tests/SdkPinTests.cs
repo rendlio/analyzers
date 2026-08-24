@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace Rendlio.Analyzers.Tests;
 
 /// <summary>
@@ -67,6 +69,44 @@ public sealed class SdkPinTests
                     Path.GetRelativePath(RepositoryLayout.Root, workflow).Replace('\\', '/'),
                     File.ReadAllText(workflow)));
         }
+
+        Assert.Empty(violations);
+    }
+
+    [Fact]
+    public void Every_job_that_runs_dotnet_installs_an_SDK_first()
+    {
+        // The sweep above folds over the steps a file HAS, so a job holding none contributes
+        // nothing for it to fault and reads as compliant — and the guard below asks each file for
+        // at least one step, which two jobs and one step satisfies. A runner is a fresh machine per
+        // job, though, so an install step reaches only the job that declares it: a job without one
+        // builds under whatever SDK the image ships. That is this repository's split moved into CI,
+        // where there is no second verdict to notice it — just a package built under analyzers
+        // nobody pinned.
+        List<string> violations = [];
+        List<string> covered = [];
+
+        foreach (string workflow in WorkflowFiles())
+        {
+            string text = File.ReadAllText(workflow);
+            string file = Path.GetFileName(workflow);
+
+            violations.AddRange(SdkPin.MissingSetupStepViolations(file, text));
+            covered.AddRange(
+                SdkPin.ReadJobs(text)
+                    .Where(job => SdkPin.RunsDotnet(job.Text))
+                    .Select(job => $"{file}: {job.Name}"));
+        }
+
+        // Guards the guard, and names each job rather than counting them, because counting in
+        // aggregate is the weakness being fixed here. A splitter that stopped finding jobs or a
+        // detector that stopped recognising a dotnet command would empty the sweep and report
+        // green. These are every job in this repository that touches the SDK: the two that build
+        // and test on both compiler hosts, and the one that packs and publishes. A job added later
+        // fails this line, which is the moment to ask whether it installs the pin.
+        Assert.Equal(
+            ["ci.yml: build-test", "release.yml: publish", "release.yml: test"],
+            covered.Order(StringComparer.Ordinal));
 
         Assert.Empty(violations);
     }
@@ -311,6 +351,156 @@ public sealed class SdkPinTests
 
         Assert.Equal(2, SdkPin.ReadSetupSteps(workflow).Count);
         Assert.Single(SdkPin.SetupStepViolations(PublishingWorkflow, workflow));
+    }
+
+    [Fact]
+    public void A_job_that_runs_dotnet_without_installing_one_is_reported()
+    {
+        // How this arrives: a second job is added to do one small thing with the toolchain — pack
+        // an artifact, read a property back out of MSBuild — and the install step is not copied
+        // across, because the job above already has one and the file looks configured.
+        const string workflow = """
+            jobs:
+              test:
+                steps:
+                  - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+                    with:
+                      global-json-file: global.json
+
+                  - name: Test
+                    run: dotnet test Rendlio.Analyzers.slnx
+
+              publish:
+                needs: test
+                steps:
+                  - name: Pack
+                    run: dotnet pack src/Rendlio.Analyzers/Rendlio.Analyzers.csproj
+            """;
+
+        // Asserted first, and it is the point of the case: the step-wise sweep finds nothing wrong
+        // with this file, because the job at fault contains no step to be wrong.
+        Assert.Empty(SdkPin.SetupStepViolations(PublishingWorkflow, workflow));
+
+        Assert.Contains(
+            "job \"publish\"",
+            Assert.Single(SdkPin.MissingSetupStepViolations(PublishingWorkflow, workflow)),
+            StringComparison.Ordinal);
+    }
+
+    [Theory]
+    // A job that installs the SDK and then uses it, which is the shape of every job here.
+    [InlineData("""
+        jobs:
+          build:
+            steps:
+              - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+                with:
+                  global-json-file: global.json
+
+              - run: dotnet build Rendlio.Analyzers.slnx
+        """)]
+    // A job that runs no dotnet command needs no SDK. "Every job installs one" is not the rule —
+    // it would fire on a labeler, and a rule that fires on correct files gets switched off.
+    [InlineData("""
+        jobs:
+          label:
+            steps:
+              - uses: actions/labeler@8558fd74291d67161a8a78ce36a881fa63b766a9 # v5.0.0
+        """)]
+    public void A_job_that_needs_no_SDK_or_installs_the_one_it_uses_is_clean(string workflow)
+    {
+        // Asserted first, for the reason the other clean fixtures assert it: a reader that found no
+        // jobs reports no violations, and that is not what this case claims.
+        Assert.NotEmpty(SdkPin.ReadJobs(workflow));
+        Assert.Empty(SdkPin.MissingSetupStepViolations(IntegrationWorkflow, workflow));
+    }
+
+    [Theory]
+    // Both invocation shapes these workflows use, copied from them: a one-line `run:`, a command
+    // inside a block, and one whose output is captured into a shell variable.
+    [InlineData("        run: dotnet restore Rendlio.Analyzers.slnx --locked-mode")]
+    [InlineData("          dotnet pack src/Rendlio.Analyzers/Rendlio.Analyzers.csproj --configuration Release")]
+    [InlineData("          declared=$(dotnet msbuild src/Rendlio.Analyzers/Rendlio.Analyzers.csproj \\")]
+    public void A_line_that_runs_the_muxer_is_a_job_that_needs_an_SDK(string line) =>
+        Assert.True(SdkPin.RunsDotnet(line));
+
+    [Theory]
+    // The action that installs an SDK is not a build that uses one. A reader matching the bare word
+    // would find one in every setup step, and then every job with a step would also "need" one —
+    // true here by luck, and false the moment a job installs an SDK it never uses.
+    [InlineData("      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1")]
+    // A path inside the package, which both workflows grep for while proving the layout.
+    [InlineData("          grep -q 'analyzers/dotnet/cs/Rendlio.Analyzers.dll' <<< \"${listing}\"")]
+    // Prose. These files explain their own steps at length, and talking about a build is not one.
+    [InlineData("        # under `dotnet build` anywhere. Shipping on one leg's word ships a pack")]
+    public void A_line_that_only_names_the_muxer_is_not_a_job_that_needs_an_SDK(string line) =>
+        Assert.False(SdkPin.RunsDotnet(line));
+
+    [Fact]
+    public void The_reader_separates_jobs_rather_than_reading_the_file_as_one()
+    {
+        // Guards the guard from the other direction. A splitter returning the whole file as one job
+        // would find the gate job's install step and count the publishing job as covered by it —
+        // the same false green, reached by reading two machines as one. It also has to stop where
+        // the jobs do: `defaults:` below puts a bare two-space key inside a top-level section, and
+        // a reader running past the left margin would report `run` as a third job.
+        const string workflow = """
+            jobs:
+              test:
+                steps:
+                  - run: dotnet test Rendlio.Analyzers.slnx
+
+              publish:
+                needs: test
+                steps:
+                  - run: dotnet nuget push ./artifacts/Rendlio.Analyzers.0.1.0.nupkg
+
+            defaults:
+              run:
+                shell: bash
+            """;
+
+        Assert.Equal(["test", "publish"], SdkPin.ReadJobs(workflow).Select(job => job.Name));
+        Assert.Equal(2, SdkPin.MissingSetupStepViolations(PublishingWorkflow, workflow).Count);
+    }
+
+    [Theory]
+    [InlineData("de-DE")]
+    [InlineData("tr-TR")]
+    public void The_pin_is_read_the_same_under_any_current_culture(string culture)
+    {
+        // The reject side of the roll-forward check matches OrdinalIgnoreCase, and that is the one
+        // comparison here a rewrite could make culture-sensitive. The hazard is concrete rather
+        // than theoretical: under tr-TR, "LATESTFEATURE".ToLower() is "latestfeature" with a
+        // dotless ı, so a case-folding rewrite would stop recognising the band-crossing policy and
+        // the guard would go green on the exact file shape it exists to reject. The flag alone does
+        // not say which way that goes; this does.
+        CultureInfo previousCulture = CultureInfo.CurrentCulture;
+        CultureInfo previousUiCulture = CultureInfo.CurrentUICulture;
+
+        try
+        {
+            var target = new CultureInfo(culture);
+            CultureInfo.CurrentCulture = target;
+            CultureInfo.CurrentUICulture = target;
+
+            // Both cultures write 1.5 with a comma and the invariant one writes a dot, so a build
+            // with InvariantGlobalization on would leave every assertion below vacuous.
+            Assert.Equal("1,5", 1.5.ToString(target));
+
+            Assert.Contains(
+                "outside the feature band",
+                Assert.Single(SdkPin.Inspect(SdkPin.FileName, Pin("10.0.400", "LATESTFEATURE", false))),
+                StringComparison.Ordinal);
+
+            Assert.Equal("10.0.4xx", SdkPin.FeatureBand("10.0.400"));
+            Assert.Empty(SdkPin.Inspect(SdkPin.FileName, File.ReadAllText(PinPath)));
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = previousCulture;
+            CultureInfo.CurrentUICulture = previousUiCulture;
+        }
     }
 
     [Fact]

@@ -76,6 +76,33 @@ internal static partial class SdkPin
         RegexOptions.CultureInvariant)]
     private static partial Regex InputLine();
 
+    /// <summary>The key that opens the section every job in a workflow is written under.</summary>
+    [GeneratedRegex(@"^jobs:[ \t]*$", RegexOptions.CultureInvariant)]
+    private static partial Regex JobsKeyLine();
+
+    /// <summary>
+    /// A job's own key: two spaces of indent, a name, and nothing after the colon.
+    /// </summary>
+    /// <remarks>
+    /// Two spaces exactly, which is what separates a job from everything written inside one —
+    /// <c>runs-on:</c> and <c>steps:</c> sit deeper, and a <c>run:</c> block's shell text deeper
+    /// still. Requiring the line to end at the colon is the other half: <c>group:
+    /// release-${{ github.ref }}</c> is indented the same and names a value, so a pattern that
+    /// stopped at the colon would read it as a job.
+    /// </remarks>
+    [GeneratedRegex(@"^  (?<name>[A-Za-z0-9_-]+):[ \t]*$", RegexOptions.CultureInvariant)]
+    private static partial Regex JobHeaderLine();
+
+    /// <summary>The <c>dotnet</c> muxer invoked as a command.</summary>
+    /// <remarks>
+    /// Bounded on the left so the word has to start a token: <c>setup-dotnet@…</c> names the action
+    /// that installs one rather than a build that uses one, and <c>analyzers/dotnet/cs</c> is a path
+    /// inside a package. Bounded on the right by whitespace for the same reason from the other
+    /// side, since every real invocation is followed by a verb.
+    /// </remarks>
+    [GeneratedRegex(@"(?<![\w./-])dotnet[ \t]", RegexOptions.CultureInvariant)]
+    private static partial Regex DotnetCommand();
+
     /// <summary>The roll-forward policies that cannot resolve outside the band the version names.</summary>
     private static readonly string[] _withinBand = ["patch", "latestPatch", "disable"];
 
@@ -93,6 +120,11 @@ internal static partial class SdkPin
     /// <param name="PinFile">Its <c>global-json-file:</c> input, or null when it has none.</param>
     /// <param name="NamedVersion">Its <c>dotnet-version:</c> input, or null when it has none.</param>
     internal readonly record struct SetupStep(string? PinFile, string? NamedVersion);
+
+    /// <summary>One job in a workflow: its name, and the lines written under it.</summary>
+    /// <param name="Name">The job's key, which is what a log and a required-check name it by.</param>
+    /// <param name="Text">Everything indented under that key, up to the next job.</param>
+    internal readonly record struct Job(string Name, string Text);
 
     /// <summary>
     /// Reads the <c>sdk</c> section of <paramref name="pinText"/>, or null when there is not one.
@@ -303,6 +335,103 @@ internal static partial class SdkPin
 
         return violations;
     }
+
+    /// <summary>
+    /// Returns every job in <paramref name="workflowText"/>, in the order the file writes them.
+    /// </summary>
+    /// <remarks>
+    /// Jobs rather than steps, because the unit an SDK is installed for is the job: a runner is a
+    /// fresh machine per job, so a <see cref="SetupAction"/> step in one reaches none of the
+    /// others. A file-wide sweep cannot see that — it folds over the steps a file has and says
+    /// nothing about the jobs that have none.
+    /// <para>
+    /// The section runs from the <c>jobs:</c> key to the next key at the left margin, and a job
+    /// runs to the next one. Coarse in the same way <see cref="ReadSetupSteps"/> is: a heredoc
+    /// inside a <c>run:</c> block whose own text sat at two spaces and ended in a colon would read
+    /// as a job. Nothing here does, and the alternative is a YAML parser for a rule that needs to
+    /// know where one job stops.
+    /// </para>
+    /// </remarks>
+    internal static IReadOnlyList<Job> ReadJobs(string workflowText)
+    {
+        string[] lines = [.. workflowText.Split('\n').Select(line => line.TrimEnd('\r'))];
+        int start = Array.FindIndex(lines, JobsKeyLine().IsMatch);
+        var jobs = new List<Job>();
+
+        if (start < 0)
+        {
+            return jobs;
+        }
+
+        string? name = null;
+        var body = new List<string>();
+
+        for (int i = start + 1; i < lines.Length && !LeavesTheJobsSection(lines[i]); i++)
+        {
+            Match header = JobHeaderLine().Match(lines[i]);
+
+            if (!header.Success)
+            {
+                if (name is not null)
+                {
+                    body.Add(lines[i]);
+                }
+
+                continue;
+            }
+
+            if (name is not null)
+            {
+                jobs.Add(new Job(name, string.Join('\n', body)));
+            }
+
+            name = header.Groups["name"].Value;
+            body.Clear();
+        }
+
+        if (name is not null)
+        {
+            jobs.Add(new Job(name, string.Join('\n', body)));
+        }
+
+        return jobs;
+    }
+
+    /// <summary>True when <paramref name="jobText"/> invokes the <c>dotnet</c> muxer anywhere.</summary>
+    /// <remarks>
+    /// Comments dropped first, for the reason <see cref="ReadSetupSteps"/> drops them: these
+    /// workflows explain their own <c>dotnet</c> steps in prose, and a job that only talks about
+    /// building is not a job that builds.
+    /// </remarks>
+    internal static bool RunsDotnet(string jobText) =>
+        jobText.Split('\n')
+            .Where(line => !line.TrimStart().StartsWith('#'))
+            .Any(DotnetCommand().IsMatch);
+
+    /// <summary>
+    /// Returns one message per job in <paramref name="workflowText"/> that runs <c>dotnet</c>
+    /// without installing an SDK first, or an empty list when every such job does.
+    /// <paramref name="workflowPath"/> only names the file in a message.
+    /// </summary>
+    /// <remarks>
+    /// The gap this closes is one a file-wide sweep leaves open by its shape. <see
+    /// cref="SetupStepViolations"/> reports steps that install the wrong SDK, and a job with no
+    /// step at all contributes nothing for it to report — so a release whose publishing job lost
+    /// its install step reads as compliant while packing under whatever SDK the runner image
+    /// happens to ship. That is this repository's split moved into CI and out of sight: not two
+    /// machines disagreeing about a build, but one machine shipping a package built under
+    /// analyzers nobody pinned.
+    /// </remarks>
+    internal static IReadOnlyList<string> MissingSetupStepViolations(
+        string workflowPath, string workflowText) =>
+        [.. ReadJobs(workflowText)
+            .Where(job => RunsDotnet(job.Text) && ReadSetupSteps(job.Text).Count == 0)
+            .Select(job =>
+                $"{workflowPath}: job \"{job.Name}\" runs dotnet without an {SetupAction} step, so it uses whatever SDK the runner image ships rather than the one {FileName} names. A runner is a fresh machine per job, so a step in another job does not reach this one.")];
+
+    /// <summary>True when <paramref name="line"/> is a key at the left margin, ending the section.</summary>
+    private static bool LeavesTheJobsSection(string line) =>
+        line.Length > 0 && !char.IsWhiteSpace(line[0]) && line[0] != '#';
 
     /// <summary>True when <paramref name="line"/> opens a YAML list item, at any indentation.</summary>
     private static bool OpensListItem(string line) =>
