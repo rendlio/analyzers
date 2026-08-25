@@ -106,12 +106,17 @@ JSON
 resolved=$(cd "${scratch}" && dotnet --version 2>/dev/null) || true
 
 # The muxer answers a version it cannot satisfy with a page of advice on stdout, which would go into
-# the message below as though it were the version that resolved. Anything not starting with a digit
-# is not an answer to the question.
-case "${resolved}" in
-  [0-9]*) ;;
-  *) resolved="" ;;
-esac
+# the message below as though it were the version that resolved.
+#
+# Judged by SHAPE, not by first character. "Anything not starting with a digit is not an answer" was
+# the first attempt and it does not hold: measured, the muxer's refusal LEADS with the installed-SDK
+# listing — `3.1.426 [C:\Program Files\dotnet\sdk]` — so it starts with a digit, survived the filter,
+# and the error message carried eight lines of listing where its own sentence promises one version.
+# A version is one line of three dot-separated numbers and nothing else; the listing fails that on
+# every count.
+if ! [[ "${resolved}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  resolved=""
+fi
 
 if [ "${resolved}" != "${sdk}" ]; then
   echo "::error::asked for SDK ${sdk} and the scratch tree resolved '${resolved:-nothing}'. Install ${sdk} and put it on PATH: rollForward is disabled there, so this is that SDK or no SDK, and anything else means the floor is not what got checked." >&2

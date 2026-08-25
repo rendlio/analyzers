@@ -102,10 +102,16 @@ public sealed class SdkPinTests
         // aggregate is the weakness being fixed here. A splitter that stopped finding jobs or a
         // detector that stopped recognising a dotnet command would empty the sweep and report
         // green. These are every job in this repository that touches the SDK: the two that build
-        // and test on both compiler hosts, and the one that packs and publishes. A job added later
-        // fails this line, which is the moment to ask whether it installs the pin.
+        // and test on both compiler hosts, the one that packs and publishes, and the one that
+        // proves the oldest host the README claims. A job added later fails this line, which is the
+        // moment to ask whether it installs the pin.
+        //
+        // host-floor was added after this list was written and is the tripwire working as intended.
+        // The question it exists to force has been asked and answered: the job installs the pinned
+        // SDK by global.json, and a second one beside it under the SDK_FLOOR convention — see the
+        // remarks on SdkPin.SetupStepViolations for why that is not a copy of the pin.
         Assert.Equal(
-            ["ci.yml: build-test", "release.yml: publish", "release.yml: test"],
+            ["ci.yml: build-test", "ci.yml: host-floor", "release.yml: publish", "release.yml: test"],
             covered.Order(StringComparer.Ordinal));
 
         Assert.Empty(violations);
@@ -296,6 +302,105 @@ public sealed class SdkPinTests
         // rules and a reader that collapsed them into one message would still pass an emptiness
         // check while telling somebody about half of what they have to fix.
         Assert.Equal(expected, SdkPin.SetupStepViolations(IntegrationWorkflow, step).Count);
+
+    // ------------------------------------- the one second SDK a step may install beside the pin
+
+    /// <summary>A job declaring the floor and installing it beside the pin — the allowed shape.</summary>
+    private const string FloorJob =
+        "jobs:\n"
+        + "  host-floor:\n"
+        + "    env:\n"
+        + "      SDK_FLOOR: '8.0.100'\n"
+        + "    steps:\n"
+        + "      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1\n"
+        + "        with:\n"
+        + "          dotnet-version: ${{ env.SDK_FLOOR }}\n"
+        + "          global-json-file: global.json";
+
+    [Fact]
+    public void A_second_SDK_declared_as_the_floor_and_installed_beside_the_pin_is_clean()
+    {
+        // The case this carve-out exists for. A job needing the oldest supported SDK as well as the
+        // pinned one is not a job with a second copy of the pin: global.json still decides what
+        // every build here resolves, and the floor SDK only hosts a throwaway consumer.
+        //
+        // Asserted alongside the step being found at all, because "no violations" and "no step read"
+        // are the same result and only one of them means what this case claims.
+        Assert.NotEmpty(SdkPin.ReadSetupSteps(FloorJob));
+        Assert.Empty(SdkPin.SetupStepViolations(IntegrationWorkflow, FloorJob));
+    }
+
+    [Theory]
+    // The expression with nothing declaring it. GitHub substitutes the empty string, setup-dotnet
+    // installs only the pin, and the floor job then proves the floor on the pinned SDK — a gate
+    // reporting on a host nobody asked about, green. Worse than a wrong literal, so it is reported.
+    [InlineData(
+        "jobs:\n"
+        + "  host-floor:\n"
+        + "    steps:\n"
+        + "      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1\n"
+        + "        with:\n"
+        + "          dotnet-version: ${{ env.SDK_FLOOR }}\n"
+        + "          global-json-file: global.json",
+        1)]
+    // Declared, but not as a version this repository could install — the same hole one step along,
+    // since setup-dotnet would take '8.0.x' and resolve whatever it liked.
+    [InlineData(
+        "jobs:\n"
+        + "  host-floor:\n"
+        + "    env:\n"
+        + "      SDK_FLOOR: '8.0.x'\n"
+        + "    steps:\n"
+        + "      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1\n"
+        + "        with:\n"
+        + "          dotnet-version: ${{ env.SDK_FLOOR }}\n"
+        + "          global-json-file: global.json",
+        1)]
+    // The floor named as a LITERAL rather than through the convention. Reported deliberately: a
+    // literal here is indistinguishable from the second copy of the pin this rule exists to catch,
+    // and it is the value nothing else in the repository would be coupled to.
+    [InlineData(
+        "jobs:\n"
+        + "  host-floor:\n"
+        + "    env:\n"
+        + "      SDK_FLOOR: '8.0.100'\n"
+        + "    steps:\n"
+        + "      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1\n"
+        + "        with:\n"
+        + "          dotnet-version: 8.0.100\n"
+        + "          global-json-file: global.json",
+        1)]
+    // The convention used to smuggle the pin out of global.json: the expression, declared, but on a
+    // step that reads no pin. Two violations, and the carve-out must not collapse them into one —
+    // deleting the version alone would leave the step installing a default.
+    [InlineData(
+        "jobs:\n"
+        + "  host-floor:\n"
+        + "    env:\n"
+        + "      SDK_FLOOR: '8.0.100'\n"
+        + "    steps:\n"
+        + "      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1\n"
+        + "        with:\n"
+        + "          dotnet-version: ${{ env.SDK_FLOOR }}",
+        2)]
+    public void A_second_SDK_that_is_not_the_declared_floor_is_still_reported(string workflow, int expected) =>
+        Assert.Equal(expected, SdkPin.SetupStepViolations(IntegrationWorkflow, workflow).Count);
+
+    [Theory]
+    // Quoting is the writer's choice; YAML reads these the same.
+    [InlineData("      SDK_FLOOR: '8.0.100'", "8.0.100")]
+    [InlineData("      SDK_FLOOR: 8.0.100", "8.0.100")]
+    [InlineData("      SDK_FLOOR: \"8.0.100\"", "8.0.100")]
+    // Not an exact version, so it names no band and nothing may be installed on its word.
+    [InlineData("      SDK_FLOOR: '8.0.x'", null)]
+    [InlineData("      SDK_FLOOR: ''", null)]
+    // Prose about the convention is not a declaration of it — this file carries such a paragraph.
+    [InlineData("      # SDK_FLOOR: '8.0.100' is the floor the README states", null)]
+    // Nothing declaring it at all.
+    [InlineData("      FRAMEWORK_FLOOR: net8.0", null)]
+    public void The_declared_floor_is_read_only_where_it_is_actually_declared(
+        string line, string? expected) =>
+        Assert.Equal(expected, SdkPin.DeclaredFloor(line));
 
     [Theory]
     // The form both workflows use: `uses:` on the list dash, inputs indented under `with:`.

@@ -44,6 +44,19 @@ internal static partial class SdkPin
     internal const string SetupAction = "actions/setup-dotnet";
 
     /// <summary>
+    /// The job-level <c>env</c> entry naming the oldest SDK this package claims to support.
+    /// </summary>
+    /// <remarks>
+    /// A convention rather than an ordinary variable: it is the one name a second SDK may be
+    /// declared under, so that a step installing one is legible as such instead of looking like a
+    /// second copy of the pin. See the remarks on <see cref="SetupStepViolations"/>.
+    /// </remarks>
+    internal const string FloorName = "SDK_FLOOR";
+
+    /// <summary>The only <c>dotnet-version</c> value permitted beside the pin.</summary>
+    internal const string FloorExpression = $"${{{{ env.{FloorName} }}}}";
+
+    /// <summary>
     /// An exact SDK version: major, minor, and the three-digit component carrying both the feature
     /// band and the patch level inside it.
     /// </summary>
@@ -308,17 +321,41 @@ internal static partial class SdkPin
     /// this holds CI to being the thing that reads it, because a step that names a version of its
     /// own is a second copy of the pin — and a second copy is the one that drifts, silently, with a
     /// green run either side of the disagreement.
+    /// <para>
+    /// <b>One exception, and it is narrow on purpose.</b> A job may need a SECOND SDK installed
+    /// beside the pinned one — the host-floor job installs the oldest SDK the README claims support
+    /// for, so it can drive a throwaway consumer under it. That is not a copy of the pin: it names a
+    /// different SDK, nothing in this repository resolves against it, and <c>global.json</c> still
+    /// decides what a bare <c>dotnet</c> here builds under. The rule above cannot tell the two apart
+    /// from a version string alone, so the difference is carried by a spelling instead:
+    /// <see cref="FloorExpression"/> is the only <c>dotnet-version</c> value allowed beside the pin,
+    /// and only on a step that reads the pin as well.
+    /// </para>
+    /// <para>
+    /// What keeps that from being a hole is where the value has to live. The expression resolves a
+    /// job-level <c>env</c> entry, which this rule requires to be an exact version — and
+    /// <c>PackGateTests</c> holds that entry to the floor the README states. So the escape is one
+    /// spelling, whose value is checked here for shape and checked there against the shipped claim.
+    /// Any other version beside the pin is still reported, and a version instead of the pin is still
+    /// two violations.
+    /// </para>
     /// </remarks>
     internal static IReadOnlyList<string> SetupStepViolations(string workflowPath, string workflowText)
     {
         var violations = new List<string>();
+        string? declaredFloor = DeclaredFloor(workflowText);
 
         foreach (SetupStep step in ReadSetupSteps(workflowText))
         {
-            if (step.NamedVersion is { } named)
+            bool readsThePin = step.PinFile == FileName;
+
+            if (step.NamedVersion is { } named
+                && !(readsThePin && named == FloorExpression && declaredFloor is not null))
             {
                 violations.Add(
-                    $"{workflowPath}: installs the SDK with \"dotnet-version: {named}\", a second copy of the pin that can drift from {FileName} with nothing anywhere to read. Take the version from \"global-json-file: {FileName}\" instead.");
+                    named == FloorExpression && readsThePin
+                        ? $"{workflowPath}: installs a second SDK with \"dotnet-version: {FloorExpression}\", but no job in this file declares {FloorName} as an exact SDK version, so the expression resolves to nothing and the step silently installs only the pin. Declare {FloorName} in the job's env."
+                        : $"{workflowPath}: installs the SDK with \"dotnet-version: {named}\", a second copy of the pin that can drift from {FileName} with nothing anywhere to read. Take the version from \"global-json-file: {FileName}\" instead. A job that genuinely needs a SECOND SDK names it as \"{FloorExpression}\" and declares {FloorName} in its env.");
             }
 
             if (step.PinFile is not { } pinFile)
@@ -334,6 +371,55 @@ internal static partial class SdkPin
         }
 
         return violations;
+    }
+
+    /// <summary>
+    /// The exact SDK version <paramref name="workflowText"/> declares as <see cref="FloorName"/>, or
+    /// null when it declares none — or declares one that is not an exact version.
+    /// </summary>
+    /// <remarks>
+    /// This is what makes the <see cref="FloorExpression"/> carve-out anchored rather than a hole. An
+    /// expression resolving to nothing is worse than a literal: GitHub substitutes the empty string,
+    /// <c>setup-dotnet</c> quietly installs only the pin, and the floor job then proves the floor on
+    /// whatever SDK the pin named — a gate reporting on a host nobody asked about, green. So the
+    /// escape is only open when the value behind it exists AND is a version this repository could
+    /// actually install.
+    /// <para>
+    /// Read with the same line reader the step inputs use, and only outside a step, because a
+    /// <c>SDK_FLOOR:</c> under a step's own <c>env:</c> would reach that step alone while the
+    /// <c>with:</c> block reads the job's. Comments are dropped first, for the reason
+    /// <see cref="ReadSetupSteps"/> drops them: this file explains the convention in prose beside it.
+    /// </para>
+    /// </remarks>
+    internal static string? DeclaredFloor(string workflowText)
+    {
+        foreach (string raw in workflowText.Split('\n'))
+        {
+            string line = raw.TrimEnd('\r');
+
+            if (line.TrimStart().StartsWith('#'))
+            {
+                continue;
+            }
+
+            Match input = InputLine().Match(line);
+
+            if (!input.Success || input.Groups["key"].Value != FloorName)
+            {
+                continue;
+            }
+
+            // Quotes are the writer's choice — YAML reads '8.0.100' and 8.0.100 the same — so they
+            // are stripped before the shape is judged rather than being part of it.
+            string value = input.Groups["value"].Value.Trim('\'', '"');
+
+            if (ExactVersion().IsMatch(value))
+            {
+                return value;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
