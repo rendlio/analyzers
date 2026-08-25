@@ -58,6 +58,11 @@ public sealed class WorkflowPinsTests
     // Thirty-nine hex characters. Close enough to read as a pin at a glance, which is exactly why
     // the length is checked rather than the alphabet.
     [InlineData("      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af67726", "11d5960a326750d5838078e36cf38b85af67726")]
+    // A reusable workflow is called at job level: no list dash, no `steps:` above it, and a path
+    // carrying its own dots and slashes. It is still someone else's code at a ref that can move,
+    // and it runs with whatever permissions the calling job hands it — so it is worth catching and
+    // is the shape least likely to look like a step.
+    [InlineData("    uses: owner/repo/.github/workflows/build.yml@v1", "v1")]
     public void A_reference_that_is_not_a_commit_is_reported(string line, string expectedRef)
     {
         Assert.Equal(expectedRef, Assert.Single(WorkflowPins.Read(line)).Ref);
@@ -85,6 +90,10 @@ public sealed class WorkflowPinsTests
     [InlineData("        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0", "v1.2.0")]
     // Whatever else the comment says, the version in it is what is read.
     [InlineData("      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0, resolved 2026-08", "v4.4.0")]
+    // The pinned form of that reusable-workflow call. The path in front of the ref carries both
+    // dots and slashes, so this holds the split to the LAST '@' rather than to the first character
+    // that could be mistaken for one.
+    [InlineData("    uses: owner/repo/.github/workflows/build.yml@11d5960a326750d5838078e36cf38b85af677262 # v1.2.0", "v1.2.0")]
     public void A_commit_with_its_version_after_it_is_clean(string line, string expectedVersion)
     {
         WorkflowPins.ActionReference reference = Assert.Single(WorkflowPins.Read(line));
@@ -131,6 +140,40 @@ public sealed class WorkflowPinsTests
             """;
 
         Assert.Equal(2, WorkflowPins.Read(workflow).Count);
+        Assert.Single(WorkflowPins.Inspect("ci.yml", workflow));
+    }
+
+    [Fact]
+    public void A_workflow_with_CRLF_endings_is_read_the_same_as_one_without()
+    {
+        // .gitattributes holds this repository to LF, so nothing exercises the other ending today
+        // — which is the reason to pin it rather than the reason not to. The reader splits on '\n'
+        // and strips the carriage return itself; an implementation that anchored a multiline
+        // pattern instead would leave it inside the ref, where forty hex characters plus one stop
+        // being forty hex characters. Both halves of the rule then invert at once: the tag below
+        // goes unreported, and the clean pin beside it is reported as a violation.
+        //
+        // Built by converting a raw literal rather than by spelling the escapes out, so the test
+        // states CRLF regardless of how this source file itself was checked out.
+        string workflow = """
+            jobs:
+              build:
+                steps:
+                  - uses: actions/checkout@v4
+                  - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+            """.ReplaceLineEndings("\r\n");
+
+        IReadOnlyList<WorkflowPins.ActionReference> references = WorkflowPins.Read(workflow);
+
+        Assert.Equal(2, references.Count);
+        Assert.Equal("v4", references[0].Ref);
+
+        // The pin survives intact: forty characters still, and a trailing comment still read for a
+        // version rather than swallowed along with the carriage return.
+        Assert.True(references[1].IsPinned);
+        Assert.Equal("v4.3.1", references[1].StatedVersion);
+
+        // One violation — the tag — and not the pin next to it.
         Assert.Single(WorkflowPins.Inspect("ci.yml", workflow));
     }
 
