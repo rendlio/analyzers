@@ -635,44 +635,50 @@ public sealed partial class ShippedTextTests
         // never prints, and the row they are standing on is the one they conclude does not apply.
         // Nothing else catches it: the rule's own cases assert WHICH api each row names and never
         // what it says about it, so before this the whole column was unread.
-        string[][] rows = [.. TableRowsUnder(
-            File.ReadAllText(Path.Combine(RepositoryRoot, BannedApiPage)),
-            BannedApiTableHeading)];
-
-        ImmutableArray<Diagnostic> reported =
-            await AnalyzerHarness.RunAsync(new BannedApiAnalyzer(), "Consumer", EveryRowOfTheTable);
-
-        string[] messages = [.. reported.Select(static d => d.GetMessage(CultureInfo.InvariantCulture))];
+        string[][] rows = RowsOfTheBannedApiTable();
+        string[] reasons = await ReasonsRendlio001Gives(EveryRowOfTheTable);
 
         // Guards the guard: a heading rename, a reshaped table or a fixture that stopped tripping a
         // row would leave reasons nobody compared, and the walk below would pass over them green.
         Assert.NotEmpty(rows);
-        Assert.Equal(rows.Length, messages.Length);
+        Assert.Equal(rows.Length, reasons.Length);
 
-        List<string> wrong = [];
-
-        foreach (string[] cells in rows)
-        {
-            string reason = Reason(cells);
-
-            if (!messages.Any(message => message.Contains(reason, StringComparison.Ordinal)))
-            {
-                wrong.Add(
-                    $"{BannedApiPage}: the row for {Banned(cells)} gives its reason as '{reason}', "
-                    + "but nothing the rule reports says that.");
-            }
-        }
-
-        foreach (string message in messages)
-        {
-            if (!rows.Any(cells => message.Contains(Reason(cells), StringComparison.Ordinal)))
-            {
-                wrong.Add($"RENDLIO001 reports '{message}', but no row on {BannedApiPage} quotes that reason.");
-            }
-        }
-
-        Assert.Empty(wrong);
+        Assert.Empty(ReasonMismatches(rows, reasons));
     }
+
+    [Fact]
+    public async Task A_row_that_quotes_only_the_front_of_its_reason_does_not_count_as_quoting_it()
+    {
+        // The walk above used to compare by containment, and a cell holding only the front of a
+        // reason satisfies that in both directions at once: the message contains the cell, and the
+        // cell is contained in the message. So `zero network I/O` passed for a rule that prints
+        // `zero network I/O; zero phone-home`, with the row count unmoved — and the reader who
+        // greps their log for the cell as printed still finds nothing, which is the failure this
+        // whole section exists to catch. Half a quotation is a paraphrase. This cuts each cell of
+        // the real page down to its front half in turn and insists the walk says so every time.
+        string[][] rows = RowsOfTheBannedApiTable();
+        string[] reasons = await ReasonsRendlio001Gives(EveryRowOfTheTable);
+
+        // Cutting a cell short only proves something if the page is intact first. These two also
+        // earn FrontHalf its cell to cut: a row too short to carry a reason could not have matched.
+        Assert.NotEmpty(rows);
+        Assert.Empty(ReasonMismatches(rows, reasons));
+
+        foreach (int row in Enumerable.Range(0, rows.Length))
+        {
+            string[][] truncated = [.. rows.Select((cells, index) => index == row ? FrontHalf(cells) : cells)];
+
+            Assert.NotEmpty(ReasonMismatches(truncated, reasons));
+        }
+    }
+
+    /// <summary>The rows of RENDLIO001's table, as the page on disk carries them.</summary>
+    private static string[][] RowsOfTheBannedApiTable() =>
+    [
+        .. TableRowsUnder(
+            File.ReadAllText(Path.Combine(RepositoryRoot, BannedApiPage)),
+            BannedApiTableHeading),
+    ];
 
     /// <summary>The api a table row names, for naming the row in a message.</summary>
     private static string Banned(string[] cells) => cells.Length > 0 ? cells[0] : "<an empty row>";
@@ -683,6 +689,103 @@ public sealed partial class ShippedTextTests
     /// </summary>
     private static string Reason(string[] cells) =>
         cells.Length > 1 ? cells[1].Trim('`') : "<no such column>";
+
+    /// <summary>That row with its reason cut in half — the shape of a truncated quotation.</summary>
+    private static string[] FrontHalf(string[] cells)
+    {
+        string reason = Reason(cells);
+        string[] truncated = [.. cells];
+        truncated[1] = reason[..(reason.Length / 2)];
+
+        return truncated;
+    }
+
+    /// <summary>
+    /// Everything the page's reason column and the reasons the rule gives disagree about, walked in
+    /// both directions so that neither a cell nothing prints nor a reason no cell quotes can hide.
+    /// </summary>
+    /// <remarks>
+    /// The comparison is exact, and that is the load-bearing part of it. Containment reads a cell
+    /// holding only the front of a reason as a match BOTH ways round and leaves the row count
+    /// untouched, so it certifies precisely the half-quotation this column must not carry. Pinned
+    /// by <see cref="A_row_that_quotes_only_the_front_of_its_reason_does_not_count_as_quoting_it"/>.
+    /// </remarks>
+    private static List<string> ReasonMismatches(string[][] rows, string[] reasons)
+    {
+        List<string> wrong = [];
+
+        foreach (string[] cells in rows)
+        {
+            string reason = Reason(cells);
+
+            if (!reasons.Any(given => string.Equals(given, reason, StringComparison.Ordinal)))
+            {
+                wrong.Add(
+                    $"{BannedApiPage}: the row for {Banned(cells)} gives its reason as '{reason}', "
+                    + "but that is not, word for word, what the rule says about it.");
+            }
+        }
+
+        foreach (string given in reasons)
+        {
+            if (!rows.Any(cells => string.Equals(Reason(cells), given, StringComparison.Ordinal)))
+            {
+                wrong.Add($"RENDLIO001 says '{given}', but no row on {BannedApiPage} quotes that.");
+            }
+        }
+
+        return wrong;
+    }
+
+    /// <summary>The reason half of every RENDLIO001 diagnostic <paramref name="source"/> trips.</summary>
+    /// <remarks>
+    /// The reason is argument 1 of the rule's message format, so it is whatever follows the text
+    /// that format puts between its two arguments. That text is read off the descriptor the rule
+    /// reports with rather than spelled out here, so rewording the message carries this with it
+    /// instead of leaving it splitting on punctuation the rule no longer prints. RENDLIO002 wraps
+    /// its reason into the sentence rather than appending it, which is why the split is keyed to
+    /// one descriptor — and why the single-descriptor assertion below is not decoration.
+    /// </remarks>
+    private static async Task<string[]> ReasonsRendlio001Gives(string source)
+    {
+        var analyzer = new BannedApiAnalyzer();
+        string separator = BetweenTheArgumentsOf(Assert.Single(analyzer.SupportedDiagnostics));
+
+        ImmutableArray<Diagnostic> reported = await AnalyzerHarness.RunAsync(analyzer, "Consumer", source);
+
+        return [.. reported.Select(d => ReasonIn(d.GetMessage(CultureInfo.InvariantCulture), separator))];
+    }
+
+    /// <summary>
+    /// The text a message format puts between <c>{0}</c> and <c>{1}</c>. A format not carrying both
+    /// in that order yields something no message contains, which leaves every reason unsplit and
+    /// every row mismatched — loudly, where returning the empty string would split every message at
+    /// its first character and quietly compare nothing against nothing.
+    /// </summary>
+    private static string BetweenTheArgumentsOf(DiagnosticDescriptor descriptor)
+    {
+        const string FirstArgument = "{0}";
+        const string SecondArgument = "{1}";
+
+        string format = descriptor.MessageFormat.ToString(CultureInfo.InvariantCulture);
+        int from = format.IndexOf(FirstArgument, StringComparison.Ordinal);
+        int to = format.IndexOf(SecondArgument, StringComparison.Ordinal);
+
+        return from >= 0 && to > from + FirstArgument.Length
+            ? format[(from + FirstArgument.Length)..to]
+            : "<not a two-argument format>";
+    }
+
+    /// <summary>
+    /// What follows the first <paramref name="separator"/> in <paramref name="message"/>, or the
+    /// whole of a message carrying none.
+    /// </summary>
+    private static string ReasonIn(string message, string separator)
+    {
+        int at = message.IndexOf(separator, StringComparison.Ordinal);
+
+        return at < 0 ? message : message[(at + separator.Length)..];
+    }
 
     /// <summary>
     /// The data rows of the first Markdown table under <paramref name="heading"/>, each as its
