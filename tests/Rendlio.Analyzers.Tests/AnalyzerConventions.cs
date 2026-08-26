@@ -34,10 +34,24 @@ internal static partial class AnalyzerConventions
     /// consciously rather than stumbled into, and it is bounded: the pattern names only the shape
     /// of such a reference, never a real document, and the fixture that exercises the rule cites a
     /// specification number that does not exist.
+    ///
+    /// <para>
+    /// Reused by <see cref="ShippedText"/>. A diagnostic message and a published page are the same
+    /// kind of text — something a stranger reads in a context we do not control — so what counts as
+    /// an unreadable reference is defined once here rather than drifting between the two.
+    /// </para>
+    /// <para>
+    /// <see cref="RegexOptions.CultureInvariant"/> states the intent and costs nothing, but note
+    /// what it does NOT do here: a source-generated regex resolves its case tables when it is
+    /// compiled, so the ambient culture cannot reach this matcher at run time either way. The flag
+    /// earns its place the moment someone rewrites this as a runtime <see cref="Regex"/> — there,
+    /// a Turkish locale folds 'I' to 'ı' and a shouted reference stops matching its lowercase
+    /// spelling. That is the regression the culture theory in the tests is aimed at.
+    /// </para>
     /// </remarks>
     [GeneratedRegex(@"\bFS-\d{2}\b|\bURS\b|docs/internal|\bwi-[0-9a-f]{8}\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex InternalReference();
+    internal static partial Regex InternalReference();
 
     /// <summary>Every concrete analyzer type declared in <paramref name="assembly"/>.</summary>
     internal static IReadOnlyList<Type> AnalyzersIn(Assembly assembly) =>

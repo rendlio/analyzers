@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.Versioning;
 using Microsoft.CodeAnalysis;
@@ -75,6 +76,39 @@ public sealed class AnalyzerConventionTests
             AnalyzerConventions.Inspect([typeof(CompliantAnalyzer), typeof(IdSquatterAnalyzer)]);
 
         Assert.Contains(violations, v => v.Contains("already used by a different descriptor", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("de-DE")]
+    [InlineData("tr-TR")]
+    public void Guard_reads_descriptor_text_the_same_under_any_culture(string culture)
+    {
+        // A consumer's build runs under their locale, not ours, and these conventions read
+        // descriptor text through it. What is pinned here is that the ambient culture cannot change
+        // what the guard reports — not any single flag: the patterns are source-generated, so their
+        // case tables are already fixed at compile time. The hazard this guards is a later rewrite
+        // to culture-sensitive matching or casing, which is live rather than theoretical — under
+        // tr-TR, "DOCS/INTERNAL".ToLower() is "docs/ınternal", and a runtime Regex built with
+        // IgnoreCase alone stops matching the shouted reference the fixture below carries.
+        CultureInfo previousCulture = CultureInfo.CurrentCulture;
+        CultureInfo previousUiCulture = CultureInfo.CurrentUICulture;
+
+        try
+        {
+            var target = new CultureInfo(culture);
+            CultureInfo.CurrentCulture = target;
+            CultureInfo.CurrentUICulture = target;
+
+            Assert.Empty(AnalyzerConventions.Inspect([typeof(CompliantAnalyzer)]));
+            Assert.Contains(
+                AnalyzerConventions.Inspect([typeof(ShoutingInternalReferenceAnalyzer)]),
+                v => v.Contains("means nothing outside", StringComparison.Ordinal));
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = previousCulture;
+            CultureInfo.CurrentUICulture = previousUiCulture;
+        }
     }
 
     // ------------------------------------------------------------------ fixtures
@@ -163,6 +197,17 @@ public sealed class AnalyzerConventionTests
 
         public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
             [Descriptor("RENDLIO904")];
+    }
+
+    /// <summary>
+    /// Shouts its internal reference. The uppercase is the whole point: it is exactly what a
+    /// culture-sensitive case-insensitive match stops recognising under a Turkish locale.
+    /// </summary>
+    [DiagnosticAnalyzer(LanguageNames.CSharp)]
+    private sealed class ShoutingInternalReferenceAnalyzer : FixtureAnalyzer
+    {
+        public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; } =
+            [Descriptor("RENDLIO905", message: "{0} is banned; see DOCS/INTERNAL/rules.md")];
     }
 
     /// <summary>Reuses RENDLIO900 for an unrelated rule.</summary>
