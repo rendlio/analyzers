@@ -9,6 +9,10 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
+    <!-- The dialect the rules' own tests arrive in. The conventions tests in this project use
+         xunit's own Assert; both dialects live here on purpose, so a synced test file stays a
+         copy of the one it came from. -->
+    <PackageReference Include="Shouldly" />
     <!-- The compiler API, so the fixtures below can declare real DiagnosticAnalyzer types.
          Rendlio.Analyzers itself takes this with ExcludeAssets="runtime" (the compiler host
          supplies it there), so this project needs its own copy at run time. -->
@@ -17,6 +21,7 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <Using Include="Shouldly" />
   </ItemGroup>
 
   <ItemGroup>

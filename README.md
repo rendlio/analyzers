@@ -4,12 +4,24 @@ Two Roslyn analyzers for .NET codebases that must not talk to the network, and m
 the same bytes every time they run:
 
 - **A network-API ban.** Opening a socket, resolving a host or issuing an HTTP request is a
-  compile error, not a code-review comment.
+  compile error, not a code-review comment — and so are the neighbouring ways out of the same
+  box: spawning a process, loading code at run time, resolving a type from a name, declaring a
+  P/Invoke.
 - **A non-deterministic-API ban.** Reading the wall clock, the random number generator, or
   ambient machine state is a compile error, so output cannot silently start depending on
   *when* or *where* a build ran.
 
 Apache-2.0. Free to use, fork and vendor.
+
+## Rules
+
+| Rule | What it bans |
+| --- | --- |
+| [RENDLIO001](https://github.com/Rendlio/analyzers/blob/main/docs/rules/RENDLIO001.md) | Network I/O, process spawning, dynamic code loading, type-name reflection, native interop declarations. |
+| [RENDLIO002](https://github.com/Rendlio/analyzers/blob/main/docs/rules/RENDLIO002.md) | `DateTime.Now`, `System.Random`, `Guid.NewGuid`. |
+
+Both report at severity error by default: installing the package is how you ask for that. Each
+page says what the rule deliberately does *not* report, and how to scope or suppress it.
 
 ## Why this exists
 
@@ -30,25 +42,40 @@ make anyone write them a second time.
 
 ## Status
 
-This repository currently holds the build, packaging and test scaffolding for the pack. The
-rule implementations are not in it yet, and `Rendlio.Analyzers` is not on NuGet yet — so
-nothing here is installable today. The convention tests that every rule must satisfy are in
-place already (`tests/Rendlio.Analyzers.Tests`), and they are what the rules land against.
+Both rules and their tests are in this repository and build here. `Rendlio.Analyzers` is not
+on NuGet yet, so the way to use it today is to build the package from this repository; there
+is nothing to install from a feed. The conventions every rule must satisfy are enforced by the
+test suite (`tests/Rendlio.Analyzers.Tests`) rather than by review.
 
 ## Where the rules are developed
 
 The rules are developed against the Rendlio Sheets engine, in the engine's own repository,
 because that is the codebase they are load-bearing for — a rule is only as good as the real
-source it is run against, and that source is where the false positives show up. This
-repository is the published home of the pack: the rules arrive here as releases rather than
-being edited in two places.
+source it is run against, and that source is where the false positives show up. **That
+repository is authoritative for what a rule detects. This one is the published home of the
+pack, and is synced from it.**
+
+What that means in practice:
+
+- **A change to a rule's behaviour is made there first** and arrives here as a release sync:
+  one commit bringing the rule and its own tests across together. Nothing about detection is
+  edited only here, or the two would drift and the pack would stop matching the codebase it is
+  proved against.
+- **The published shape is decided here.** Packaging, the diagnostic text a stranger reads,
+  the help link every rule carries, the per-rule pages under `docs/rules/`, and the conventions
+  in `tests/Rendlio.Analyzers.Tests`. A rule that arrives citing something a reader cannot look
+  up fails the build here — which is why the sync is a real step and not a copy.
+- **Rule ids are allocated once across both repositories**, so an id never means two different
+  things. The next rule published here may therefore not be the next number.
+- **If the development home ever moves to this repository**, the direction of the sync reverses
+  and this section changes to say so. Nothing else does: same ids, same package, same licence.
 
 ## Rule ids
 
 Rule ids are family-scoped: `RENDLIO` followed by three digits (`RENDLIO001`, `RENDLIO002`,
 …). Ids are never reused for a different rule, so a suppression a consumer writes today keeps
 meaning what they meant by it. Every rule carries a help link to its own documentation page;
-the test suite fails the build if one does not.
+the test suite fails the build if one does not, or if the page it points at is missing.
 
 ## Building
 

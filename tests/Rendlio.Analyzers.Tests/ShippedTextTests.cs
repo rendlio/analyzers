@@ -1,4 +1,7 @@
+using System.Reflection;
 using System.Xml.Linq;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
 
 namespace Rendlio.Analyzers.Tests;
 
@@ -180,6 +183,47 @@ public sealed class ShippedTextTests
 
         // Guards the guard, for the reason the walk above is guarded: a resolver that quietly
         // stopped matching would leave nothing to check and report green forever.
+        Assert.NotEqual(0, linksChecked);
+        Assert.Empty(broken);
+    }
+
+    [Fact]
+    public void Every_shipped_rule_links_to_a_page_that_is_in_this_repository()
+    {
+        // The conventions in AnalyzerConventionTests require an absolute http(s) help link, but
+        // they never touch the disk, so they cannot check it points at anything. This is the other
+        // half: a rule a stranger cannot look up is a rule they suppress rather than fix, and a
+        // link to a page that has been renamed reads exactly like one that works.
+        List<string> broken = [];
+        int linksChecked = 0;
+
+        foreach (Type type in AnalyzerConventions.AnalyzersIn(Assembly.Load("Rendlio.Analyzers")))
+        {
+            // A rule that cannot be constructed is already a failure of the conventions test; there
+            // is nothing further for this one to say about it.
+            if (Activator.CreateInstance(type) is not DiagnosticAnalyzer analyzer)
+            {
+                continue;
+            }
+
+            foreach (DiagnosticDescriptor rule in analyzer.SupportedDiagnostics)
+            {
+                linksChecked++;
+
+                // Written the way a page would write it, so the same resolver decides what "names a
+                // file in this repository" means for a help link and for a link on a page.
+                string? target = PageLinks
+                    .RepositoryTargets("README.md", $"[{rule.Id}]({rule.HelpLinkUri})", RepositoryUrl)
+                    .SingleOrDefault();
+
+                if (target is null || !File.Exists(Path.Combine(RepositoryRoot, target)))
+                {
+                    broken.Add($"{rule.Id}: help link '{rule.HelpLinkUri}' is not a page in this repository.");
+                }
+            }
+        }
+
+        // Guards the guard: an empty pack would otherwise report green forever.
         Assert.NotEqual(0, linksChecked);
         Assert.Empty(broken);
     }
