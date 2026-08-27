@@ -96,9 +96,40 @@ public sealed partial class ShippedTextTests
     }
 
     [Theory]
+    // The phrasing these pages actually use, and the reason the rule is a lookahead rather than a
+    // search for the full phrase: a page that qualifies the association correctly is compliant.
+    [InlineData("Rendlio is built by a Swiss association in formation, with profits pledged to charities.")]
+    // The same sentence hard-wrapped where the pages are wrapped. The qualifier routinely lands on
+    // the next line, so this is the common case rather than an edge one.
+    [InlineData("Rendlio is built by a Swiss association\nin formation, with profits pledged to charities.")]
+    public void Guard_accepts_the_identity_phrasing_these_pages_use(string page) =>
+        Assert.Empty(ShippedText.Inspect("fixture.md", page));
+
+    [Theory]
     // The product name here is deliberately fictitious: a fixture only needs a name that is not the
     // announced one, and naming a real unannounced product to test the rule would break it.
     [InlineData("Rendlio Widgets renders charts.", "not an announced product")]
+    // Emphasis is how a page would style a name, not a way around the rule — a reader sees the same
+    // two words either way. The fictitious-name reasoning above applies to these as well, and both
+    // spellings of emphasis appear because they behave differently at the left edge: '_' is a word
+    // character and '*' is not.
+    [InlineData("**Rendlio** Widgets renders charts.", "not an announced product")]
+    [InlineData("*Rendlio Widgets* renders charts.", "not an announced product")]
+    [InlineData("_Rendlio_ Widgets renders charts.", "not an announced product")]
+    // Fidelity comparison. Left as a bare shape with nothing on the other side of "against", for
+    // the reason the pattern itself gives: a fixture naming what output would be compared with
+    // would publish here exactly what the rule exists to keep off the pages.
+    [InlineData("Output is scored against a reference implementation.", "not something these pages describe")]
+    [InlineData("The oracle decides whether a render is correct.", "not something these pages describe")]
+    // The association stated as though it already existed — a one-word edit from the phrasing that
+    // is true, and one that reads perfectly well, which is the whole reason it is pinned.
+    [InlineData("Rendlio is built by a Swiss association.", "presents as existing")]
+    // The two lines below are the only place in this repository that spells the banned phrasing
+    // out, and they have to: a guard that rejects a phrase cannot prove that it rejects it without
+    // containing it. Unlike every other fixture here there is no fictitious stand-in — the phrase
+    // IS the thing being rejected, so it cannot be stood in for. A publish-hygiene sweep grepping
+    // this repository will find these two occurrences and no others; they are fixture data being
+    // fed to a rule, not a statement about the engine.
     [InlineData("The engine is open source.", "source-available")]
     [InlineData("The engine is open-source.", "source-available")]
     [InlineData("Rationale lives in docs/internal/design.md.", "means nothing to a reader")]
@@ -108,6 +139,68 @@ public sealed partial class ShippedTextTests
         IReadOnlyList<string> violations = ShippedText.Inspect("fixture.md", page);
 
         Assert.Contains(violations, v => v.Contains(expected, StringComparison.Ordinal));
+    }
+
+    // -------------------------- the identity these pages state, and the text the walk cannot see
+
+    /// <summary>How this repository states who is behind Rendlio.</summary>
+    /// <remarks>
+    /// The qualifier is the load-bearing half, and <see cref="ShippedText"/> already rejects the
+    /// association stated without it — but a rule that rejects a wrong sentence cannot notice a
+    /// sentence that is no longer there. This is the other half of it.
+    /// </remarks>
+    [GeneratedRegex(@"a Swiss association in formation", RegexOptions.CultureInvariant)]
+    private static partial Regex AssociationInFormation();
+
+    /// <summary>What this repository says happens to the profits.</summary>
+    /// <remarks>
+    /// Deliberately loose about the verb and the plural, and anchored to no surrounding sentence:
+    /// it has to keep matching when the paragraph is reworded, or the pin becomes a tax on editing
+    /// prose rather than a guard on the commitment.
+    /// </remarks>
+    [GeneratedRegex(@"profits (?:are )?pledged to charit(?:y|ies)", RegexOptions.CultureInvariant)]
+    private static partial Regex ProfitsPledged();
+
+    [Fact]
+    public void The_readme_states_who_is_behind_rendlio_and_what_happens_to_the_profits()
+    {
+        // The README is the PackageReadmeFile, so this is what a consumer reads on the gallery page
+        // when they ask who they are installing from. Both halves are commitments rather than
+        // colour — the qualifier says the association does not exist yet, and the pledge is the
+        // reason a pack this small is free — and both are stated in one short section that an edit
+        // tightening the README would trim without anything going red.
+        //
+        // Unwrapped first: the sentence sits at the ~90-column wrap these pages are written to, so
+        // rewrapping it is an ordinary edit that must not turn this red.
+        string readme = ShippedText.Unwrap(File.ReadAllText(Path.Combine(RepositoryRoot, "README.md")));
+
+        Assert.True(
+            AssociationInFormation().IsMatch(readme),
+            "README.md no longer says Rendlio is built by a Swiss association in formation.");
+        Assert.True(
+            ProfitsPledged().IsMatch(readme),
+            "README.md no longer says the profits are pledged to charities.");
+    }
+
+    [Theory]
+    [InlineData("Description")]
+    [InlineData("PackageTags")]
+    public void The_package_metadata_meets_the_publishing_rules(string field)
+    {
+        // The walk enumerates *.md and this text is in none of them: it lives in the project file.
+        // It is published text all the same — nuget.org renders the description under the package
+        // title and the tags beside it, so it reaches the same reader the README does — and being
+        // outside the walk means nothing else was ever going to read it either.
+        //
+        // Single() rather than SingleOrDefault(): a property renamed away has to fail loudly here
+        // rather than leave this case inspecting nothing and reporting green, which is what every
+        // guard-the-guard assertion in this file exists to prevent.
+        string value = XDocument
+            .Load(Path.Combine(RepositoryRoot, "src", "Rendlio.Analyzers", "Rendlio.Analyzers.csproj"))
+            .Descendants(field).Single().Value.Trim();
+
+        Assert.NotEmpty(value);
+        Assert.Empty(ShippedText.Inspect($"Rendlio.Analyzers.csproj <{field}>", value));
     }
 
     // ------------------------------------------- the triage policy, and the links that reach it

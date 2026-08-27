@@ -71,9 +71,17 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: dotnet format Rendlio.Analyzers.slnx --verify-no-changes --verbosity diagnostic
 
+      # Platform is passed explicitly so this line means the same thing on a developer's box as it
+      # does here. Building the solution maps the platform onto its projects, which are AnyCPU, so
+      # output lands in bin/Release; packing the project DIRECTLY takes an ambient Platform as a
+      # global property instead, moves $(OutputPath) to bin/<platform>/Release, and fails NU5019
+      # looking for a build nobody wrote there. A runner sets no Platform, so this is a no-op here
+      # — it is on the line so that copying the line is enough.
       - name: Pack
         if: matrix.os == 'ubuntu-latest'
-        run: dotnet pack src/Rendlio.Analyzers/Rendlio.Analyzers.csproj --configuration Release --no-build --output ./artifacts
+        run: >
+          dotnet pack src/Rendlio.Analyzers/Rendlio.Analyzers.csproj --configuration Release --no-build
+          -p:Platform=AnyCPU --output ./artifacts
 
       - name: Verify the analyzer is packaged where NuGet looks for it
         if: matrix.os == 'ubuntu-latest'

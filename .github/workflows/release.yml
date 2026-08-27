@@ -160,10 +160,14 @@ jobs:
           dotnet build Rendlio.Analyzers.slnx --configuration Release --no-restore
           -p:Version=${{ steps.version.outputs.version }}
 
+      # Platform is passed for the reason ci.yml gives on the same step: packing the project
+      # directly takes an ambient Platform as a global property and then looks for the build under
+      # bin/<platform>/Release, which a solution build never wrote to. A no-op on a runner, and the
+      # difference between this command working and failing NU5019 when it is run by hand.
       - name: Pack
         run: >
           dotnet pack src/Rendlio.Analyzers/Rendlio.Analyzers.csproj --configuration Release --no-build
-          -p:Version=${{ steps.version.outputs.version }} --output ./artifacts
+          -p:Version=${{ steps.version.outputs.version }} -p:Platform=AnyCPU --output ./artifacts
 
       - name: Verify the analyzer is packaged where NuGet looks for it
         env:
