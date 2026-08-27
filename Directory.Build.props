@@ -54,6 +54,26 @@
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
 
+  <!-- ========================= Build platform =========================== -->
+  <PropertyGroup>
+    <!-- Why: MSBuild reads environment variables as properties, and a Visual Studio Developer
+         Command Prompt exports Platform=x64. A solution build maps its projects onto their own
+         platform and writes bin/Release; the same project addressed DIRECTLY inherits the shell's
+         value instead, moves $(OutputPath) to bin/x64/Release, and a pack that skips the build
+         then fails NU5019 looking for an assembly nobody wrote there — reported as a missing file
+         rather than as the shell it came from. Nothing here is platform-specific: an analyzer is
+         loaded into whatever compiler host the consumer runs. The solution says as much already;
+         this says it to a project addressed on its own.
+
+         Stated unconditionally on purpose. The SDK writes its own default as a condition on
+         $(Platform) being empty, which is precisely what an inherited variable stops it from
+         being — so the same line written defensively would read as a fix and do nothing. An
+         explicit -p:Platform= on the command line is a global property and still wins, because
+         MSBuild ignores a project-file assignment to one: this neutralises the ambient case, and
+         only the ambient case. -->
+    <Platform>AnyCPU</Platform>
+  </PropertyGroup>
+
   <!-- ===================== Reproducible output ========================== -->
   <PropertyGroup>
     <!-- Why: this pack exists to prove determinism in someone else's build, so its own
