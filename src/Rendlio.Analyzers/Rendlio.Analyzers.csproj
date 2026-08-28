@@ -23,7 +23,7 @@
   <PropertyGroup>
     <IsPackable>true</IsPackable>
     <PackageId>Rendlio.Analyzers</PackageId>
-    <VersionPrefix>0.1.0</VersionPrefix>
+    <VersionPrefix>0.1.1</VersionPrefix>
     <Description>Roslyn analyzers that ban network APIs and non-deterministic APIs in .NET code. These are how Rendlio proves zero phone-home and byte-identical output on its own engine code at compile time; they are published free for anyone with the same requirements.</Description>
     <PackageTags>roslyn;analyzers;analyzer;determinism;reproducible-builds;no-network;offline;banned-api;codeanalysis</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>

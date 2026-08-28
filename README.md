@@ -36,7 +36,7 @@ dotnet add package Rendlio.Analyzers
 or, as a `PackageReference`:
 
 ```xml
-<PackageReference Include="Rendlio.Analyzers" Version="0.1.0" PrivateAssets="all" />
+<PackageReference Include="Rendlio.Analyzers" Version="0.1.1" PrivateAssets="all" />
 ```
 
 `PrivateAssets="all"` keeps the analyzers out of your own package's dependencies: they check
